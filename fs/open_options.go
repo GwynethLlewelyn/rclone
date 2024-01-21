@@ -40,10 +40,10 @@ type OpenOption interface {
 //
 // Examples:
 //
-//     RangeOption{Start: 0, End: 99} - fetch the first 100 bytes
-//     RangeOption{Start: 100, End: 199} - fetch the second 100 bytes
-//     RangeOption{Start: 100, End: -1} - fetch bytes from offset 100 to the end
-//     RangeOption{Start: -1, End: 100} - fetch the last 100 bytes
+//	RangeOption{Start: 0, End: 99} - fetch the first 100 bytes
+//	RangeOption{Start: 100, End: 199} - fetch the second 100 bytes
+//	RangeOption{Start: 100, End: -1} - fetch bytes from offset 100 to the end
+//	RangeOption{Start: -1, End: 100} - fetch the last 100 bytes
 //
 // A RangeOption implements a single byte-range-spec from
 // https://tools.ietf.org/html/rfc7233#section-2.1
@@ -274,6 +274,26 @@ func (o MetadataOption) String() string {
 // Mandatory returns whether the option must be parsed or can be ignored
 func (o MetadataOption) Mandatory() bool {
 	return false
+}
+
+// ChunkOption defines an Option which returns a preferred chunk size
+type ChunkOption struct {
+	ChunkSize int64
+}
+
+// Header formats the option as an http header
+func (o *ChunkOption) Header() (key string, value string) {
+	return "chunkSize", fmt.Sprintf("%v", o.ChunkSize)
+}
+
+// Mandatory returns whether the option must be parsed or can be ignored
+func (o *ChunkOption) Mandatory() bool {
+	return false
+}
+
+// String formats the option into human-readable form
+func (o *ChunkOption) String() string {
+	return fmt.Sprintf("ChunkOption(%v)", o.ChunkSize)
 }
 
 // OpenOptionAddHeaders adds each header found in options to the

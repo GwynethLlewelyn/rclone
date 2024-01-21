@@ -133,11 +133,13 @@ Owner is able to add custom keys. Metadata feature grabs all the keys including 
 		},
 
 		Options: []fs.Option{{
-			Name: "access_key_id",
-			Help: "IAS3 Access Key.\n\nLeave blank for anonymous access.\nYou can find one here: https://archive.org/account/s3.php",
+			Name:      "access_key_id",
+			Help:      "IAS3 Access Key.\n\nLeave blank for anonymous access.\nYou can find one here: https://archive.org/account/s3.php",
+			Sensitive: true,
 		}, {
-			Name: "secret_access_key",
-			Help: "IAS3 Secret Key (password).\n\nLeave blank for anonymous access.",
+			Name:      "secret_access_key",
+			Help:      "IAS3 Secret Key (password).\n\nLeave blank for anonymous access.",
+			Sensitive: true,
 		}, {
 			// their official client (https://github.com/jjjake/internetarchive) hardcodes following the two
 			Name:     "endpoint",
@@ -227,7 +229,7 @@ type Object struct {
 	rawData json.RawMessage
 }
 
-// IAFile reprensents a subset of object in MetadataResponse.Files
+// IAFile represents a subset of object in MetadataResponse.Files
 type IAFile struct {
 	Name string `json:"name"`
 	// Source     string `json:"source"`
@@ -243,7 +245,7 @@ type IAFile struct {
 	rawData json.RawMessage
 }
 
-// MetadataResponse reprensents subset of the JSON object returned by (frontend)/metadata/
+// MetadataResponse represents subset of the JSON object returned by (frontend)/metadata/
 type MetadataResponse struct {
 	Files    []IAFile `json:"files"`
 	ItemSize int64    `json:"item_size"`
@@ -577,9 +579,9 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 
 // Copy src to this remote using server-side copy operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // Will only be called if src.Fs().Name() == f.Name()
 //
@@ -800,7 +802,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		headers["x-archive-size-hint"] = fmt.Sprintf("%d", size)
 	}
 	var mdata fs.Metadata
-	mdata, err = fs.GetMetadataOptions(ctx, src, options)
+	mdata, err = fs.GetMetadataOptions(ctx, o.fs, src, options)
 	if err == nil && mdata != nil {
 		for mk, mv := range mdata {
 			mk = strings.ToLower(mk)
@@ -1273,7 +1275,7 @@ func trimPathPrefix(s, prefix string, enc encoder.MultiEncoder) string {
 	return enc.ToStandardPath(strings.TrimPrefix(s, prefix+"/"))
 }
 
-// mimicks urllib.parse.quote() on Python; exclude / from url.PathEscape
+// mimics urllib.parse.quote() on Python; exclude / from url.PathEscape
 func quotePath(s string) string {
 	seg := strings.Split(s, "/")
 	newValues := []string{}

@@ -1,13 +1,14 @@
 ---
 title: "Local Filesystem"
 description: "Rclone docs for the local filesystem"
+versionIntroduced: "v0.91"
 ---
 
 # {{< icon "fas fa-hdd" >}} Local Filesystem
 
 Local paths are specified as normal filesystem paths, e.g. `/path/to/wherever`, so
 
-    rclone sync -i /home/source /tmp/destination
+    rclone sync --interactive /home/source /tmp/destination
 
 Will sync `/home/source` to `/tmp/destination`.
 
@@ -18,10 +19,10 @@ For consistencies sake one can also configure a remote of type
 rclone remote paths, e.g. `remote:path/to/wherever`, but it is probably
 easier not to.
 
-### Modified time ###
+### Modification times
 
-Rclone reads and writes the modified time using an accuracy determined by
-the OS. Typically this is 1ns on Linux, 10 ns on Windows and 1 Second
+Rclone reads and writes the modification times using an accuracy determined
+by the OS. Typically this is 1ns on Linux, 10 ns on Windows and 1 Second
 on OS X.
 
 ### Filenames ###
@@ -428,8 +429,8 @@ Properties:
 Don't check to see if the files change during upload.
 
 Normally rclone checks the size and modification time of files as they
-are being uploaded and aborts with a message which starts "can't copy
-- source file is being updated" if the file changes during upload.
+are being uploaded and aborts with a message which starts "can't copy -
+source file is being updated" if the file changes during upload.
 
 However on some file systems this modification time check may fail (e.g.
 [Glusterfs #2206](https://github.com/rclone/rclone/issues/2206)) so this
@@ -450,6 +451,11 @@ time we:
 - Only checksum the size that stat gave
 - Don't update the stat info for the file
 
+**NB** do not use this flag on a Windows Volume Shadow (VSS). For some
+unknown reason, files in a VSS sometimes show different sizes from the
+directory listing (where the initial stat value comes from on Windows)
+and when stat is called on them directly. Other copy tools always use
+the direct stat value and setting this flag will disable that.
 
 
 Properties:
@@ -560,7 +566,7 @@ Properties:
 
 - Config:      encoding
 - Env Var:     RCLONE_LOCAL_ENCODING
-- Type:        MultiEncoder
+- Type:        Encoding
 - Default:     Slash,Dot
 
 ### Metadata

@@ -1,6 +1,7 @@
 ---
 title: "Memory"
 description: "Rclone docs for Memory backend"
+versionIntroduced: "v1.51"
 ---
 
 # {{< icon "fas fa-memory" >}} Memory
@@ -53,7 +54,7 @@ testing or with an rclone server or rclone mount, e.g.
     rclone serve webdav :memory:
     rclone serve sftp :memory:
 
-### Modified time and hashes
+### Modification times and hashes
 
 The memory backend supports MD5 hashes and modification times accurate to 1 nS.
 

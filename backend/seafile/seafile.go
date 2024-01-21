@@ -1,3 +1,4 @@
+// Package seafile provides an interface to the Seafile storage system.
 package seafile
 
 import (
@@ -66,15 +67,18 @@ func init() {
 				Value: "https://cloud.seafile.com/",
 				Help:  "Connect to cloud.seafile.com.",
 			}},
+			Sensitive: true,
 		}, {
-			Name:     configUser,
-			Help:     "User name (usually email address).",
-			Required: true,
+			Name:      configUser,
+			Help:      "User name (usually email address).",
+			Required:  true,
+			Sensitive: true,
 		}, {
 			// Password is not required, it will be left blank for 2FA
 			Name:       configPassword,
 			Help:       "Password.",
 			IsPassword: true,
+			Sensitive:  true,
 		}, {
 			Name:    config2FA,
 			Help:    "Two-factor authentication ('true' if the account has 2FA enabled).",
@@ -86,6 +90,7 @@ func init() {
 			Name:       configLibraryKey,
 			Help:       "Library password (for encrypted libraries only).\n\nLeave blank if you pass it through the command line.",
 			IsPassword: true,
+			Sensitive:  true,
 		}, {
 			Name:     configCreateLibrary,
 			Help:     "Should rclone create a library if it doesn't exist.",
@@ -93,9 +98,10 @@ func init() {
 			Default:  false,
 		}, {
 			// Keep the authentication token after entering the 2FA code
-			Name: configAuthToken,
-			Help: "Authentication token.",
-			Hide: fs.OptionHideBoth,
+			Name:      configAuthToken,
+			Help:      "Authentication token.",
+			Hide:      fs.OptionHideBoth,
+			Sensitive: true,
 		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
@@ -136,12 +142,13 @@ type Fs struct {
 	features            *fs.Features // optional features
 	endpoint            *url.URL     // URL of the host
 	endpointURL         string       // endpoint as a string
-	srv                 *rest.Client // the connection to the one drive server
+	srv                 *rest.Client // the connection to the server
 	pacer               *fs.Pacer    // pacer for API calls
 	authMu              sync.Mutex   // Mutex to protect library decryption
 	createDirMutex      sync.Mutex   // Protect creation of directories
 	useOldDirectoryAPI  bool         // Use the old API v2 if seafile < 7
 	moveDirNotAvailable bool         // Version < 7.0 don't have an API to move a directory
+	renew               *Renew       // Renew an encrypted library token
 }
 
 // ------------------------------------------------------------
@@ -267,6 +274,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			}
 			// And remove the public link feature
 			f.features.PublicLink = nil
+
+			// renew the library password every 45 minutes
+			f.renew = NewRenew(45*time.Minute, func() error {
+				return f.authorizeLibrary(context.Background(), libraryID)
+			})
 		}
 	} else {
 		// Deactivate the cleaner feature since there's no library selected
@@ -380,6 +392,15 @@ func Config(ctx context.Context, name string, m configmap.Mapper, config fs.Conf
 		return nil, errors.New("2fa authentication failed")
 	}
 	return nil, fmt.Errorf("unknown state %q", config.State)
+}
+
+// Shutdown the Fs
+func (f *Fs) Shutdown(ctx context.Context) error {
+	if f.renew == nil {
+		return nil
+	}
+	f.renew.Shutdown()
+	return nil
 }
 
 // sets the AuthorizationToken up
@@ -671,9 +692,9 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) e
 
 // Copy src to this remote using server-side copy operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // If it isn't possible then return fs.ErrorCantCopy
 func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
@@ -722,9 +743,9 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 
 // Move src to this remote using server-side move operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // If it isn't possible then return fs.ErrorCantMove
 func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
@@ -1330,6 +1351,7 @@ var (
 	_ fs.PutStreamer  = &Fs{}
 	_ fs.PublicLinker = &Fs{}
 	_ fs.UserInfoer   = &Fs{}
+	_ fs.Shutdowner   = &Fs{}
 	_ fs.Object       = &Object{}
 	_ fs.IDer         = &Object{}
 )

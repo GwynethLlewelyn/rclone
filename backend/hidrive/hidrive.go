@@ -2,7 +2,7 @@
 package hidrive
 
 // FIXME HiDrive only supports file or folder names of 255 characters or less.
-// Operations that create files oder folder with longer names will throw a HTTP error:
+// Operations that create files or folders with longer names will throw an HTTP error:
 // - 422 Unprocessable Entity
 // A more graceful way for rclone to handle this may be desirable.
 
@@ -330,7 +330,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		f.tokenRenewer = oauthutil.NewRenew(f.String(), ts, transaction)
 	}
 
-	// Do not allow the root-prefix to be non-existent nor a directory,
+	// Do not allow the root-prefix to be nonexistent nor a directory,
 	// but it can be empty.
 	if f.opt.RootPrefix != "" {
 		item, err := f.fetchMetadataForPath(ctx, f.opt.RootPrefix, api.HiDriveObjectNoMetadataFields)
@@ -338,7 +338,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			return nil, fmt.Errorf("could not access root-prefix: %w", err)
 		}
 		if item.Type != api.HiDriveObjectTypeDirectory {
-			return nil, errors.New("The root-prefix needs to point to a valid directory or be empty")
+			return nil, errors.New("the root-prefix needs to point to a valid directory or be empty")
 		}
 	}
 
@@ -623,7 +623,7 @@ func (f *Fs) Purge(ctx context.Context, dir string) error {
 // should be retried after the parent-directories of the destination have been created.
 // If so, it will create the parent-directories.
 //
-// If any errors arrise while finding the source or
+// If any errors arise while finding the source or
 // creating the parent-directory those will be returned.
 // Otherwise returns the originalError.
 func (f *Fs) shouldRetryAndCreateParents(ctx context.Context, destinationPath string, sourcePath string, originalError error) (bool, error) {
@@ -759,6 +759,12 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 		}
 		return err
 	}
+	return nil
+}
+
+// Shutdown shutdown the fs
+func (f *Fs) Shutdown(ctx context.Context) error {
+	f.tokenRenewer.Shutdown()
 	return nil
 }
 
@@ -961,7 +967,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		} else {
 			_, _, err = o.fs.uploadFileChunked(ctx, resolvedPath, in, modTime, int(o.fs.opt.UploadChunkSize), o.fs.opt.UploadConcurrency)
 		}
-		// Try to check if object was updated, eitherway.
+		// Try to check if object was updated, either way.
 		// Metadata should be updated even if the upload fails.
 		info, metaErr = o.fs.fetchMetadataForPath(ctx, resolvedPath, api.HiDriveObjectWithMetadataFields)
 	} else {
@@ -997,6 +1003,7 @@ var (
 	_ fs.Copier         = (*Fs)(nil)
 	_ fs.Mover          = (*Fs)(nil)
 	_ fs.DirMover       = (*Fs)(nil)
+	_ fs.Shutdowner     = (*Fs)(nil)
 	_ fs.Object         = (*Object)(nil)
 	_ fs.IDer           = (*Object)(nil)
 )

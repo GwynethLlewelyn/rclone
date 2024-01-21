@@ -14,13 +14,16 @@ Rclone is a Go program and comes as a single binary file.
   * Run `rclone config` to setup. See [rclone config docs](/docs/) for more details.
   * Optionally configure [automatic execution](#autostart).
 
-See below for some expanded Linux / macOS instructions.
+See below for some expanded Linux / macOS / Windows instructions.
 
 See the [usage](/docs/) docs for how to use rclone, or
 run `rclone -h`.
 
 Already installed rclone can be easily updated to the latest version
 using the [rclone selfupdate](/commands/rclone_selfupdate/) command.
+
+See [the release signing docs](/release_signing/) for how to verify
+signatures on the release.
 
 ## Script installation
 
@@ -35,7 +38,9 @@ For beta installation, run:
 Note that this script checks the version of rclone installed first and
 won't re-download if not needed.
 
-## Linux installation from precompiled binary
+## Linux installation {#linux}
+
+### Precompiled binary {#linux-precompiled}
 
 Fetch and unpack
 
@@ -59,7 +64,9 @@ Run `rclone config` to setup. See [rclone config docs](/docs/) for more details.
 
     rclone config
 
-## macOS installation with brew
+## macOS installation {#macos}
+
+### Installation with brew {#macos-brew}
 
     brew install rclone
 
@@ -68,7 +75,25 @@ NOTE: This version of rclone will not support `mount` any more (see
 on macOS, either install a precompiled binary or enable the relevant option
 when [installing from source](#install-from-source).
 
-## macOS installation from precompiled binary, using curl
+Note that this is a third party installer not controlled by the rclone
+developers so it may be out of date. Its current version is as below.
+
+[![Homebrew package](https://repology.org/badge/version-for-repo/homebrew/rclone.svg)](https://repology.org/project/rclone/versions)
+
+### Installation with MacPorts (#macos-macports)
+
+On macOS, rclone can also be installed via [MacPorts](https://www.macports.org):
+
+    sudo port install rclone
+
+Note that this is a third party installer not controlled by the rclone
+developers so it may be out of date. Its current version is as below.
+
+[![MacPorts port](https://repology.org/badge/version-for-repo/macports/rclone.svg)](https://repology.org/project/rclone/versions)
+
+More information [here](https://ports.macports.org/port/rclone/).
+
+### Precompiled binary, using curl {#macos-precompiled}
 
 To avoid problems with macOS gatekeeper enforcing the binary to be signed and
 notarized it is enough to download with `curl`.
@@ -96,7 +121,7 @@ Run `rclone config` to setup. See [rclone config docs](/docs/) for more details.
 
     rclone config
 
-## macOS installation from precompiled binary, using a web browser
+### Precompiled binary, using a web browser  {#macos-precompiled-web}
 
 When downloading a binary with a web browser, the browser will set the macOS
 gatekeeper quarantine attribute. Starting from Catalina, when attempting to run
@@ -109,11 +134,99 @@ The simplest fix is to run
 
     xattr -d com.apple.quarantine rclone
 
-## Install with docker
+## Windows installation {#windows}
 
-The rclone maintains a [docker image for rclone](https://hub.docker.com/r/rclone/rclone).
-These images are autobuilt by docker hub from the rclone source based
-on a minimal Alpine linux image.
+### Precompiled binary {#windows-precompiled}
+
+Fetch the correct binary for your processor type by clicking on these
+links. If not sure, use the first link.
+
+- [Intel/AMD - 64 Bit](https://downloads.rclone.org/rclone-current-windows-amd64.zip)
+- [Intel/AMD - 32 Bit](https://downloads.rclone.org/rclone-current-windows-386.zip)
+- [ARM - 64 Bit](https://downloads.rclone.org/rclone-current-windows-arm64.zip)
+
+Open this file in the Explorer and extract `rclone.exe`. Rclone is a
+portable executable so you can place it wherever is convenient.
+
+Open a CMD window (or powershell) and run the binary. Note that rclone
+does not launch a GUI by default, it runs in the CMD Window.
+
+- Run `rclone.exe config` to setup. See [rclone config docs](/docs/) for more details.
+- Optionally configure [automatic execution](#autostart).
+
+If you are planning to use the [rclone mount](/commands/rclone_mount/)
+feature then you will need to install the third party utility
+[WinFsp](https://winfsp.dev/) also.
+
+### Windows package manager (Winget) {#windows-chocolatey}
+
+[Winget](https://learn.microsoft.com/en-us/windows/package-manager/) comes pre-installed with the latest versions of Windows. If not, update the [App Installer](https://www.microsoft.com/p/app-installer/9nblggh4nns1) package from the Microsoft store.
+
+To install rclone
+```
+winget install Rclone.Rclone
+```
+To uninstall rclone
+```
+winget uninstall Rclone.Rclone --force
+```
+
+### Chocolatey package manager {#windows-chocolatey}
+
+Make sure you have [Choco](https://chocolatey.org/) installed
+
+```
+choco search rclone
+choco install rclone
+```
+
+This will install rclone on your Windows machine. If you are planning
+to use [rclone mount](/commands/rclone_mount/) then
+
+```
+choco install winfsp
+```
+
+will install that too.
+
+Note that this is a third party installer not controlled by the rclone
+developers so it may be out of date. Its current version is as below.
+
+[![Chocolatey package](https://repology.org/badge/version-for-repo/chocolatey/rclone.svg)](https://repology.org/project/rclone/versions)
+
+### Scoop package manager {#windows-scoop}
+
+Make sure you have [Scoop](https://scoop.sh/) installed
+
+```
+scoop install rclone
+```
+
+Note that this is a third party installer not controlled by the rclone
+developers so it may be out of date. Its current version is as below.
+
+[![Scoop package](https://repology.org/badge/version-for-repo/scoop/rclone.svg)](https://repology.org/project/rclone/versions)
+
+## Package manager installation {#package-manager}
+
+Many Linux, Windows, macOS and other OS distributions package and
+distribute rclone.
+
+The distributed versions of rclone are often quite out of date and for
+this reason we recommend one of the other installation methods if
+possible.
+
+You can get an idea of how up to date or not your OS distribution's
+package is here.
+
+[![Packaging status](https://repology.org/badge/vertical-allrepos/rclone.svg?columns=3)](https://repology.org/project/rclone/versions)
+
+## Docker installation {#docker}
+
+The rclone developers maintain a [docker image for rclone](https://hub.docker.com/r/rclone/rclone).
+
+These images are built as part of the release process based on a
+minimal Alpine Linux.
 
 The `:latest` tag will always point to the latest stable release.  You
 can use the `:beta` tag to get the latest build from master.  You can
@@ -166,10 +279,16 @@ Here are some commands tested on an Ubuntu 18.04.3 host:
 # config on host at ~/.config/rclone/rclone.conf
 # data on host at ~/data
 
+# add a remote interactively
+docker run --rm -it \
+    --volume ~/.config/rclone:/config/rclone \
+    --user $(id -u):$(id -g) \
+    rclone/rclone \
+    config
+
 # make sure the config is ok by listing the remotes
 docker run --rm \
     --volume ~/.config/rclone:/config/rclone \
-    --volume ~/data:/data:shared \
     --user $(id -u):$(id -g) \
     rclone/rclone \
     listremotes
@@ -187,11 +306,33 @@ docker run --rm \
 ls ~/data/mount
 kill %1
 ```
+## Snap installation {#snap}
 
-## Install from source
+[![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-black.svg)](https://snapcraft.io/rclone)
+
+Make sure you have [Snapd installed](https://snapcraft.io/docs/installing-snapd)
+
+```bash
+$ sudo snap install rclone
+```
+Due to the strict confinement of Snap, rclone snap cannot access real /home/$USER/.config/rclone directory, default config path is as below.
+
+- Default config directory:
+    - /home/$USER/snap/rclone/current/.config/rclone
+
+Note: Due to the strict confinement of Snap, `rclone mount` feature is `not` supported.
+
+If mounting is wanted, either install a precompiled binary or enable the relevant option when [installing from source](#source).
+
+Note that this is controlled by [community maintainer](https://github.com/boukendesho/rclone-snap) not the rclone developers so it may be out of date. Its current version is as below.
+
+[![rclone](https://snapcraft.io/rclone/badge.svg)](https://snapcraft.io/rclone)
+
+
+## Source installation {#source}
 
 Make sure you have git and [Go](https://golang.org/) installed.
-Go version 1.16 or newer is required, latest release is recommended.
+Go version 1.18 or newer is required, the latest release is recommended.
 You can get it from your package manager, or download it from
 [golang.org/dl](https://golang.org/dl/). Then you can run the following:
 
@@ -207,7 +348,7 @@ in the same folder. As an initial check you can now run `./rclone version`
 (`.\rclone version` on Windows).
 
 Note that on macOS and Windows the [mount](https://rclone.org/commands/rclone_mount/)
-command will not be available unless you specify additional build tag `cmount`.
+command will not be available unless you specify an additional build tag `cmount`.
 
 ```
 go build -tags cmount
@@ -225,25 +366,59 @@ port of GCC, e.g. by installing it in a [MSYS2](https://www.msys2.org)
 distribution (make sure you install it in the classic mingw64 subsystem, the
 ucrt64 version is not compatible).
 
-Additionally, on Windows, you must install the third party utility
-[WinFsp](http://www.secfs.net/winfsp/), with the "Developer" feature selected.
+Additionally, to build with mount on Windows, you must install the third party
+utility [WinFsp](https://winfsp.dev/), with the "Developer" feature selected.
 If building with cgo, you must also set environment variable CPATH pointing to
 the fuse include directory within the WinFsp installation
 (normally `C:\Program Files (x86)\WinFsp\inc\fuse`).
 
-You may also add arguments `-ldflags -s` (with or without `-tags cmount`),
-to omit symbol table and debug information, making the executable file smaller,
-and `-trimpath` to remove references to local file system paths. This is how
-the official rclone releases are built.
+You may add arguments `-ldflags -s` to omit symbol table and debug information,
+making the executable file smaller, and `-trimpath` to remove references to
+local file system paths. The official rclone releases are built with both of these.
 
 ```
 go build -trimpath -ldflags -s -tags cmount
 ```
 
+If you want to customize the version string, as reported by
+the `rclone version` command, you can set one of the variables `fs.Version`,
+`fs.VersionTag` (to keep default suffix but customize the number),
+or `fs.VersionSuffix` (to keep default number but customize the suffix).
+This can be done from the build command, by adding to the `-ldflags`
+argument value as shown below.
+
+```
+go build -trimpath -ldflags "-s -X github.com/rclone/rclone/fs.Version=v9.9.9-test" -tags cmount
+```
+
+On Windows, the official executables also have the version information,
+as well as a file icon, embedded as binary resources. To get that with your
+own build you need to run the following command **before** the build command.
+It generates a Windows resource system object file, with extension .syso, e.g.
+`resource_windows_amd64.syso`, that will be automatically picked up by
+future build commands.
+
+```
+go run bin/resource_windows.go
+```
+
+The above command will generate a resource file containing version information
+based on the fs.Version variable in source at the time you run the command,
+which means if the value of this variable changes you need to re-run the
+command for it to be reflected in the version information. Also, if you
+override this version variable in the build command as described above, you
+need to do that also when generating the resource file, or else it will still
+use the value from the source.
+
+```
+go run bin/resource_windows.go -version v9.9.9-test
+```
+
 Instead of executing the `go build` command directly, you can run it via the
-Makefile, which also sets version information and copies the resulting rclone
-executable into your GOPATH bin folder (`$(go env GOPATH)/bin`, which
-corresponds to `~/go/bin/rclone` by default).
+Makefile. The default target changes the version suffix from "-DEV" to "-beta"
+followed by additional commit details, embeds version information binary resources
+on Windows, and copies the resulting rclone executable into your GOPATH bin folder
+(`$(go env GOPATH)/bin`, which corresponds to `~/go/bin/rclone` by default).
 
 ```
 make
@@ -255,26 +430,24 @@ To include mount command on macOS and Windows with Makefile build:
 make GOTAGS=cmount
 ```
 
-As an alternative you can download the source, build and install rclone in one
-operation, as a regular Go package. The source will be stored it in the Go
-module cache, and the resulting executable will be in your GOPATH bin folder
-(`$(go env GOPATH)/bin`, which corresponds to `~/go/bin/rclone` by default).
+There are other make targets that can be used for more advanced builds,
+such as cross-compiling for all supported os/architectures, and packaging
+results into release artifacts.
+See [Makefile](https://github.com/rclone/rclone/blob/master/Makefile)
+and [cross-compile.go](https://github.com/rclone/rclone/blob/master/bin/cross-compile.go)
+for details.
 
-With Go version 1.17 or newer:
+Another alternative method for source installation is to download the source,
+build and install rclone - all in one operation, as a regular Go package.
+The source will be stored it in the Go module cache, and the resulting
+executable will be in your GOPATH bin folder (`$(go env GOPATH)/bin`,
+which corresponds to `~/go/bin/rclone` by default).
 
 ```
 go install github.com/rclone/rclone@latest
 ```
 
-With Go versions older than 1.17 (do **not** use the `-u` flag, it causes Go to
-try to update the dependencies that rclone uses and sometimes these don't work
-with the current version):
-
-```
-go get github.com/rclone/rclone
-```
-
-## Installation with Ansible
+## Ansible installation {#ansible}
 
 This can be done with [Stefan Weichinger's ansible
 role](https://github.com/stefangweichinger/ansible-rclone).
@@ -290,7 +463,7 @@ Instructions
           - rclone
 ```
 
-## Portable installation
+## Portable installation {#portable}
 
 As mentioned [above](https://rclone.org/install/#quickstart), rclone is single
 executable (`rclone`, or `rclone.exe` on Windows) that you can download as a
@@ -360,7 +533,7 @@ the system. Both scheduled task and Windows service can be used to achieve this.
 NOTE: Remember that when rclone runs as the `SYSTEM` user, the user profile
 that it sees will not be yours. This means that if you normally run rclone with
 configuration file in the default location, to be able to use the same configuration
-when running as the system user you must explicitely tell rclone where to find
+when running as the system user you must explicitly tell rclone where to find
 it with the [`--config`](https://rclone.org/docs/#config-config-file) option,
 or else it will look in the system users profile path (`C:\Windows\System32\config\systemprofile`).
 To test your command manually from a Command Prompt, you can run it with
@@ -424,7 +597,7 @@ it should be possible through path rewriting as described [here](https://github.
 
 To Windows service running any rclone command, the excellent third-party utility
 [NSSM](http://nssm.cc), the "Non-Sucking Service Manager", can be used.
-It includes some advanced features such as adjusting process periority, defining
+It includes some advanced features such as adjusting process priority, defining
 process environment variables, redirect to file anything written to stdout, and
 customized response to different exit codes, with a GUI to configure everything from
 (although it can also be used from command line ).
@@ -435,7 +608,7 @@ It requires .NET Framework, but it is preinstalled on newer versions of Windows,
 also provides alternative standalone distributions which includes necessary runtime (.NET 5).
 WinSW is a command-line only utility, where you have to manually create an XML file with
 service configuration. This may be a drawback for some, but it can also be an advantage
-as it is easy to back up and re-use the configuration
+as it is easy to back up and reuse the configuration
 settings, without having go through manual steps in a GUI. One thing to note is that
 by default it does not restart the service on error, one have to explicit enable this
 in the configuration file (via the "onfailure" parameter).
