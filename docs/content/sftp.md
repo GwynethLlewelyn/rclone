@@ -1,6 +1,7 @@
 ---
 title: "SFTP"
 description: "SFTP"
+versionIntroduced: "v1.36"
 ---
 
 # {{< icon "fa fa-server" >}} SFTP
@@ -21,7 +22,7 @@ SSH installations.
 Paths are specified as `remote:path`. If the path does not begin with
 a `/` it is relative to the home directory of the user.  An empty path
 `remote:` refers to the user's home directory. For example, `rclone lsd remote:` 
-would list the home directory of the user cofigured in the rclone remote config 
+would list the home directory of the user configured in the rclone remote config 
 (`i.e /home/sftpuser`). However, `rclone lsd remote:/` would list the root 
 directory for remote machine (i.e. `/`)
 
@@ -108,7 +109,7 @@ List the contents of a directory
 Sync `/home/local/directory` to the remote directory, deleting any
 excess files in the directory.
 
-    rclone sync -i /home/local/directory remote:directory
+    rclone sync --interactive /home/local/directory remote:directory
 
 Mount the remote path `/srv/www-data/` to the local path
 `/mnt/www-data`
@@ -264,7 +265,7 @@ can also run a SSH server, which is a port of OpenSSH (see official
 [installation guide](https://docs.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse)). On a Windows server the shell handling is different: Although it can also
 be set up to use a Unix type shell, e.g. Cygwin bash, the default is to
 use Windows Command Prompt (cmd.exe), and PowerShell is a recommended
-alternative. All of these have bahave differently, which rclone must handle.
+alternative. All of these have behave differently, which rclone must handle.
 
 Rclone tries to auto-detect what type of shell is used on the server,
 first time you access the SFTP remote. If a remote shell session is
@@ -296,7 +297,7 @@ a new sftp remote is accessed. If you configure a sftp remote
 without a config file, e.g. an [on the fly](/docs/#backend-path-to-dir])
 remote, rclone will have nowhere to store the result, and it
 will re-run the command on every access. To avoid this you should
-explicitely set the `shell_type` option to the correct value,
+explicitly set the `shell_type` option to the correct value,
 or to `none` if you want to prevent rclone from executing any
 remote shell commands.
 
@@ -304,7 +305,7 @@ It is also important to note that, since the shell type decides
 how quoting and escaping of file paths used as command-line arguments
 are performed, configuring the wrong shell type may leave you exposed
 to command injection exploits. Make sure to confirm the auto-detected
-shell type, or explicitely set the shell type you know is correct,
+shell type, or explicitly set the shell type you know is correct,
 or disable shell access until you know.
 
 ### Checksum
@@ -358,7 +359,7 @@ commands is prohibited.  Set the configuration option `disable_hashcheck`
 to `true` to disable checksumming entirely, or set `shell_type` to `none`
 to disable all functionality based on remote shell command execution.
 
-### Modified time
+### Modification times and hashes
 
 Modified times are stored on the server to 1 second precision.
 
@@ -527,6 +528,9 @@ This enables the use of the following insecure ciphers and key exchange methods:
 
 Those algorithms are insecure and may allow plaintext data to be recovered by an attacker.
 
+This must be false if you use either ciphers or key_exchange advanced options.
+
+
 Properties:
 
 - Config:      use_insecure_cipher
@@ -551,6 +555,42 @@ Properties:
 - Env Var:     RCLONE_SFTP_DISABLE_HASHCHECK
 - Type:        bool
 - Default:     false
+
+#### --sftp-ssh
+
+Path and arguments to external ssh binary.
+
+Normally rclone will use its internal ssh library to connect to the
+SFTP server. However it does not implement all possible ssh options so
+it may be desirable to use an external ssh binary.
+
+Rclone ignores all the internal config if you use this option and
+expects you to configure the ssh binary with the user/host/port and
+any other options you need.
+
+**Important** The ssh command must log in without asking for a
+password so needs to be configured with keys or certificates.
+
+Rclone will run the command supplied either with the additional
+arguments "-s sftp" to access the SFTP subsystem or with commands such
+as "md5sum /path/to/file" appended to read checksums.
+
+Any arguments with spaces in should be surrounded by "double quotes".
+
+An example setting might be:
+
+    ssh -o ServerAliveInterval=20 user@example.com
+
+Note that when using an external ssh binary rclone makes a new ssh
+connection for every hash it calculates.
+
+
+Properties:
+
+- Config:      ssh
+- Env Var:     RCLONE_SFTP_SSH
+- Type:        SpaceSepList
+- Default:     
 
 ### Advanced options
 
@@ -604,6 +644,18 @@ E.g. if shared folders can be found in directories representing volumes:
 E.g. if home directory can be found in a shared folder called "home":
 
     rclone sync /home/local/directory remote:/home/directory --sftp-path-override /volume1/homes/USER/directory
+	
+To specify only the path to the SFTP remote's root, and allow rclone to add any relative subpaths automatically (including unwrapping/decrypting remotes as necessary), add the '@' character to the beginning of the path.
+
+E.g. the first example above could be rewritten as:
+
+	rclone sync /home/local/directory remote:/directory --sftp-path-override @/volume2
+	
+Note that when using this method with Synology "home" folders, the full "/homes/USER" path should be specified instead of "/home".
+
+E.g. the second example above should be rewritten as:
+
+	rclone sync /home/local/directory remote:/homes/USER/directory --sftp-path-override @/volume1
 
 Properties:
 
@@ -699,6 +751,15 @@ Specifies the path or command to run a sftp server on the remote host.
 
 The subsystem option is ignored when server_command is defined.
 
+If adding server_command to the configuration file please note that 
+it should not be enclosed in quotes, since that will make rclone fail.
+
+A working example is:
+
+    [remote_name]
+    type = sftp
+    server_command = sudo /usr/libexec/openssh/sftp-server
+
 Properties:
 
 - Config:      server_command
@@ -789,19 +850,24 @@ Properties:
 
 Upload and download chunk size.
 
-This controls the maximum packet size used in the SFTP protocol. The
-RFC limits this to 32768 bytes (32k), however a lot of servers
-support larger sizes and setting it larger will increase transfer
-speed dramatically on high latency links.
+This controls the maximum size of payload in SFTP protocol packets.
+The RFC limits this to 32768 bytes (32k), which is the default. However,
+a lot of servers support larger sizes, typically limited to a maximum
+total package size of 256k, and setting it larger will increase transfer
+speed dramatically on high latency links. This includes OpenSSH, and,
+for example, using the value of 255k works well, leaving plenty of room
+for overhead while still being within a total packet size of 256k.
 
-Only use a setting higher than 32k if you always connect to the same
-server or after sufficiently broad testing.
-
-For example using the value of 252k with OpenSSH works well with its
-maximum packet size of 256k.
-
-If you get the error "failed to send packet header: EOF" when copying
-a large file, try lowering this number.
+Make sure to test thoroughly before using a value higher than 32k,
+and only use it if you always connect to the same server or after
+sufficiently broad testing. If you get errors such as
+"failed to send packet payload: EOF", lots of "connection lost",
+or "corrupted on transfer", when copying a larger file, try lowering
+the value. The server run by [rclone serve sftp](/commands/rclone_serve_sftp)
+sends packets with standard 32k maximum payload so you must not
+set a different chunk_size when downloading files, but it accepts
+packets up to the 256k total size, so for uploads the chunk_size
+can be set as for the OpenSSH example above.
 
 
 Properties:
@@ -841,7 +907,7 @@ Pass multiple variables space separated, eg
 
     VAR1=value VAR2=value
 
-and pass variables with spaces in in quotes, eg
+and pass variables with spaces in quotes, eg
 
     "VAR3=value with space" "VAR4=value with space" VAR5=nospacehere
 
@@ -853,6 +919,128 @@ Properties:
 - Env Var:     RCLONE_SFTP_SET_ENV
 - Type:        SpaceSepList
 - Default:     
+
+#### --sftp-ciphers
+
+Space separated list of ciphers to be used for session encryption, ordered by preference.
+
+At least one must match with server configuration. This can be checked for example using ssh -Q cipher.
+
+This must not be set if use_insecure_cipher is true.
+
+Example:
+
+    aes128-ctr aes192-ctr aes256-ctr aes128-gcm@openssh.com aes256-gcm@openssh.com
+
+
+Properties:
+
+- Config:      ciphers
+- Env Var:     RCLONE_SFTP_CIPHERS
+- Type:        SpaceSepList
+- Default:     
+
+#### --sftp-key-exchange
+
+Space separated list of key exchange algorithms, ordered by preference.
+
+At least one must match with server configuration. This can be checked for example using ssh -Q kex.
+
+This must not be set if use_insecure_cipher is true.
+
+Example:
+
+    sntrup761x25519-sha512@openssh.com curve25519-sha256 curve25519-sha256@libssh.org ecdh-sha2-nistp256
+
+
+Properties:
+
+- Config:      key_exchange
+- Env Var:     RCLONE_SFTP_KEY_EXCHANGE
+- Type:        SpaceSepList
+- Default:     
+
+#### --sftp-macs
+
+Space separated list of MACs (message authentication code) algorithms, ordered by preference.
+
+At least one must match with server configuration. This can be checked for example using ssh -Q mac.
+
+Example:
+
+    umac-64-etm@openssh.com umac-128-etm@openssh.com hmac-sha2-256-etm@openssh.com
+
+
+Properties:
+
+- Config:      macs
+- Env Var:     RCLONE_SFTP_MACS
+- Type:        SpaceSepList
+- Default:     
+
+#### --sftp-host-key-algorithms
+
+Space separated list of host key algorithms, ordered by preference.
+
+At least one must match with server configuration. This can be checked for example using ssh -Q HostKeyAlgorithms.
+
+Note: This can affect the outcome of key negotiation with the server even if server host key validation is not enabled.
+
+Example:
+
+    ssh-ed25519 ssh-rsa ssh-dss
+
+
+Properties:
+
+- Config:      host_key_algorithms
+- Env Var:     RCLONE_SFTP_HOST_KEY_ALGORITHMS
+- Type:        SpaceSepList
+- Default:     
+
+#### --sftp-socks-proxy
+
+Socks 5 proxy host.
+	
+Supports the format user:pass@host:port, user@host:port, host:port.
+
+Example:
+
+	myUser:myPass@localhost:9005
+	
+
+Properties:
+
+- Config:      socks_proxy
+- Env Var:     RCLONE_SFTP_SOCKS_PROXY
+- Type:        string
+- Required:    false
+
+#### --sftp-copy-is-hardlink
+
+Set to enable server side copies using hardlinks.
+
+The SFTP protocol does not define a copy command so normally server
+side copies are not allowed with the sftp backend.
+
+However the SFTP protocol does support hardlinking, and if you enable
+this flag then the sftp backend will support server side copies. These
+will be implemented by doing a hardlink from the source to the
+destination.
+
+Not all sftp servers support this.
+
+Note that hardlinking two files together will use no additional space
+as the source and the destination will be the same file.
+
+This feature may be useful backups made with --copy-dest.
+
+Properties:
+
+- Config:      copy_is_hardlink
+- Env Var:     RCLONE_SFTP_COPY_IS_HARDLINK
+- Type:        bool
+- Default:     false
 
 {{< rem autogenerated options stop >}}
 

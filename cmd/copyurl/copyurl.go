@@ -1,3 +1,4 @@
+// Package copyurl provides the copyurl command.
 package copyurl
 
 import (
@@ -24,11 +25,11 @@ var (
 func init() {
 	cmd.Root.AddCommand(commandDefinition)
 	cmdFlags := commandDefinition.Flags()
-	flags.BoolVarP(cmdFlags, &autoFilename, "auto-filename", "a", autoFilename, "Get the file name from the URL and use it for destination file path")
-	flags.BoolVarP(cmdFlags, &headerFilename, "header-filename", "", headerFilename, "Get the file name from the Content-Disposition header")
-	flags.BoolVarP(cmdFlags, &printFilename, "print-filename", "p", printFilename, "Print the resulting name from --auto-filename")
-	flags.BoolVarP(cmdFlags, &noClobber, "no-clobber", "", noClobber, "Prevent overwriting file with same name")
-	flags.BoolVarP(cmdFlags, &stdout, "stdout", "", stdout, "Write the output to stdout rather than a file")
+	flags.BoolVarP(cmdFlags, &autoFilename, "auto-filename", "a", autoFilename, "Get the file name from the URL and use it for destination file path", "")
+	flags.BoolVarP(cmdFlags, &headerFilename, "header-filename", "", headerFilename, "Get the file name from the Content-Disposition header", "")
+	flags.BoolVarP(cmdFlags, &printFilename, "print-filename", "p", printFilename, "Print the resulting name from --auto-filename", "")
+	flags.BoolVarP(cmdFlags, &noClobber, "no-clobber", "", noClobber, "Prevent overwriting file with same name", "")
+	flags.BoolVarP(cmdFlags, &stdout, "stdout", "", stdout, "Write the output to stdout rather than a file", "")
 }
 
 var commandDefinition = &cobra.Command{
@@ -50,6 +51,10 @@ destination if there is one with the same name.
 Setting ` + "`--stdout`" + ` or making the output file name ` + "`-`" + `
 will cause the output to be written to standard output.
 `,
+	Annotations: map[string]string{
+		"versionIntroduced": "v1.43",
+		"groups":            "Important",
+	},
 	RunE: func(command *cobra.Command, args []string) (err error) {
 		cmd.CheckArgs(1, 2, command, args)
 

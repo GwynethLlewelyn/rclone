@@ -1,7 +1,6 @@
 package vfstest
 
 import (
-	"io/ioutil"
 	"os"
 	"time"
 
@@ -49,6 +48,14 @@ func (f realOsFile) Node() vfs.Node {
 	return nil
 }
 
+func (f realOsFile) Lock() error {
+	return os.ErrInvalid
+}
+
+func (f realOsFile) Unlock() error {
+	return os.ErrInvalid
+}
+
 // Chtimes
 func (r realOs) Chtimes(name string, atime time.Time, mtime time.Time) error {
 	return os.Chtimes(name, atime, mtime)
@@ -88,12 +95,24 @@ func (r realOs) OpenFile(name string, flags int, perm os.FileMode) (vfs.Handle, 
 
 // ReadDir
 func (r realOs) ReadDir(dirname string) ([]os.FileInfo, error) {
-	return ioutil.ReadDir(dirname)
+	entries, err := os.ReadDir(dirname)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]os.FileInfo, 0, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }
 
 // ReadFile
 func (r realOs) ReadFile(filename string) (b []byte, err error) {
-	return ioutil.ReadFile(filename)
+	return os.ReadFile(filename)
 }
 
 // Remove

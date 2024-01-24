@@ -1,6 +1,7 @@
 ---
 title: "pCloud"
 description: "Rclone docs for pCloud"
+versionIntroduced: "v1.39"
 ---
 
 # {{< icon "fa fa-cloud" >}} pCloud
@@ -39,9 +40,10 @@ client_id>
 Pcloud App Client Secret - leave blank normally.
 client_secret> 
 Remote config
-Use auto config?
- * Say Y if not sure
- * Say N if you are working on a remote or headless machine
+Use web browser to automatically authenticate rclone with remote?
+ * Say Y if the machine running rclone has a web browser you can use
+ * Say N if running rclone on a (remote) machine without web browser access
+If not sure try Y. If Y failed, try N.
 y) Yes
 n) No
 y/n> y
@@ -84,7 +86,7 @@ To copy a local directory to a pCloud directory called backup
 
     rclone copy /home/source remote:backup
 
-### Modified time and hashes ###
+### Modification times and hashes
 
 pCloud allows modification times to be set on objects accurate to 1
 second.  These will be used to detect whether objects need syncing or
@@ -223,7 +225,7 @@ Properties:
 
 - Config:      encoding
 - Env Var:     RCLONE_PCLOUD_ENCODING
-- Type:        MultiEncoder
+- Type:        Encoding
 - Default:     Slash,BackSlash,Del,Ctl,InvalidUtf8,Dot
 
 #### --pcloud-root-folder-id

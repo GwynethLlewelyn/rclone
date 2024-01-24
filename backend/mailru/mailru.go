@@ -1,3 +1,4 @@
+// Package mailru provides an interface to the Mail.ru Cloud storage system.
 package mailru
 
 import (
@@ -17,7 +18,6 @@ import (
 
 	"encoding/hex"
 	"encoding/json"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 
@@ -85,13 +85,19 @@ func init() {
 		Name:        "mailru",
 		Description: "Mail.ru Cloud",
 		NewFs:       NewFs,
-		Options: []fs.Option{{
-			Name:     "user",
-			Help:     "User name (usually email).",
-			Required: true,
+		Options: append(oauthutil.SharedOptions, []fs.Option{{
+			Name:      "user",
+			Help:      "User name (usually email).",
+			Required:  true,
+			Sensitive: true,
 		}, {
-			Name:       "pass",
-			Help:       "Password.",
+			Name: "pass",
+			Help: `Password.
+
+This must be an app password - rclone will not work with your normal
+password. See the Configuration section in the docs for how to make an
+app password.
+`,
 			Required:   true,
 			IsPassword: true,
 		}, {
@@ -208,7 +214,7 @@ Supported quirks: atomicmkdir binlist unknowndirs`,
 				encoder.EncodeWin | // :?"*<>|
 				encoder.EncodeBackSlash |
 				encoder.EncodeInvalidUtf8),
-		}},
+		}}...),
 	})
 }
 
@@ -630,21 +636,17 @@ func (f *Fs) readItemMetaData(ctx context.Context, path string) (entry fs.DirEnt
 
 // itemToEntry converts API item to rclone directory entry
 // The dirSize return value is:
-//   <0 - for a file or in case of error
-//   =0 - for an empty directory
-//   >0 - for a non-empty directory
+//
+//	<0 - for a file or in case of error
+//	=0 - for an empty directory
+//	>0 - for a non-empty directory
 func (f *Fs) itemToDirEntry(ctx context.Context, item *api.ListItem) (entry fs.DirEntry, dirSize int, err error) {
 	remote, err := f.relPath(f.opt.Enc.ToStandardPath(item.Home))
 	if err != nil {
 		return nil, -1, err
 	}
 
-	mTime := int64(item.Mtime)
-	if mTime < 0 {
-		fs.Debugf(f, "Fixing invalid timestamp %d on mailru file %q", mTime, remote)
-		mTime = 0
-	}
-	modTime := time.Unix(mTime, 0)
+	modTime := time.Unix(int64(item.Mtime), 0)
 
 	isDir, err := f.isDir(item.Kind, remote)
 	if err != nil {
@@ -1658,7 +1660,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 	// Attempt to put by calculating hash in memory
 	if trySpeedup && size <= int64(o.fs.opt.SpeedupMaxMem) {
-		fileBuf, err = ioutil.ReadAll(in)
+		fileBuf, err = io.ReadAll(in)
 		if err != nil {
 			return err
 		}
@@ -1701,7 +1703,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	if size <= mrhash.Size {
 		// Optimize upload: skip extra request if data fits in the hash buffer.
 		if fileBuf == nil {
-			fileBuf, err = ioutil.ReadAll(wrapIn)
+			fileBuf, err = io.ReadAll(wrapIn)
 		}
 		if fileHash == nil && err == nil {
 			fileHash = mrhash.Sum(fileBuf)
@@ -2056,7 +2058,7 @@ func (o *Object) addFileMetaData(ctx context.Context, overwrite bool) error {
 	req.WritePu16(0) // revision
 	req.WriteString(o.fs.opt.Enc.FromStandardPath(o.absPath()))
 	req.WritePu64(o.size)
-	req.WritePu64(o.modTime.Unix())
+	req.WriteP64(o.modTime.Unix())
 	req.WritePu32(0)
 	req.Write(o.mrHash)
 
@@ -2212,7 +2214,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		fs.Debugf(o, "Server returned full content instead of range")
 		if start > 0 {
 			// Discard the beginning of the data
-			_, err = io.CopyN(ioutil.Discard, wrapStream, start)
+			_, err = io.CopyN(io.Discard, wrapStream, start)
 			if err != nil {
 				closeBody(res)
 				return nil, err

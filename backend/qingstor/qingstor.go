@@ -1,9 +1,8 @@
-// Package qingstor provides an interface to QingStor object storage
-// Home: https://www.qingcloud.com/
-
 //go:build !plan9 && !js
 // +build !plan9,!js
 
+// Package qingstor provides an interface to QingStor object storage
+// Home: https://www.qingcloud.com/
 package qingstor
 
 import (
@@ -50,11 +49,13 @@ func init() {
 				Help:  "Get QingStor credentials from the environment (env vars or IAM).",
 			}},
 		}, {
-			Name: "access_key_id",
-			Help: "QingStor Access Key ID.\n\nLeave blank for anonymous access or runtime credentials.",
+			Name:      "access_key_id",
+			Help:      "QingStor Access Key ID.\n\nLeave blank for anonymous access or runtime credentials.",
+			Sensitive: true,
 		}, {
-			Name: "secret_access_key",
-			Help: "QingStor Secret Access Key (password).\n\nLeave blank for anonymous access or runtime credentials.",
+			Name:      "secret_access_key",
+			Help:      "QingStor Secret Access Key (password).\n\nLeave blank for anonymous access or runtime credentials.",
+			Sensitive: true,
 		}, {
 			Name: "endpoint",
 			Help: "Enter an endpoint URL to connection QingStor API.\n\nLeave blank will use the default value \"https://qingstor.com:443\".",
@@ -431,9 +432,9 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 
 // Copy src to this remote using server-side copy operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // Will only be called if src.Fs().Name() == f.Name()
 //
@@ -477,7 +478,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 
 // Return an Object from a path
 //
-//If it can't be found it returns the error ErrorObjectNotFound.
+// If it can't be found it returns the error ErrorObjectNotFound.
 func (f *Fs) newObjectWithInfo(remote string, info *qs.KeyType) (fs.Object, error) {
 	o := &Object{
 		fs:     f,

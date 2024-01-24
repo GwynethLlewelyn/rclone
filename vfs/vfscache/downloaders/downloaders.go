@@ -1,3 +1,4 @@
+// Package downloaders provides utilities for the VFS layer
 package downloaders
 
 import (
@@ -137,8 +138,8 @@ func New(item Item, opt *vfscommon.Options, remote string, src fs.Object) (dls *
 //
 // It should be called with
 //
-//   n bytes downloaded
-//   err is error from download
+//	n bytes downloaded
+//	err is error from download
 //
 // call with lock held
 func (dls *Downloaders) _countErrors(n int64, err error) {
@@ -344,7 +345,7 @@ func (dls *Downloaders) _ensureDownloader(r ranges.Range) (err error) {
 		start, offset := dl.getRange()
 
 		// The downloader's offset to offset+window is the gap
-		// in which we would like to re-use this
+		// in which we would like to reuse this
 		// downloader. The downloader will never reach before
 		// start and offset+windows is too far away - we'd
 		// rather start another downloader.

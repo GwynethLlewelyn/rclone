@@ -10,19 +10,19 @@ import (
 )
 
 // LogLevel describes rclone's logs.  These are a subset of the syslog log levels.
-type LogLevel byte
+type LogLevel = Enum[logLevelChoices]
 
 // Log levels.  These are the syslog levels of which we only use a
 // subset.
 //
-//    LOG_EMERG      system is unusable
-//    LOG_ALERT      action must be taken immediately
-//    LOG_CRIT       critical conditions
-//    LOG_ERR        error conditions
-//    LOG_WARNING    warning conditions
-//    LOG_NOTICE     normal, but significant, condition
-//    LOG_INFO       informational message
-//    LOG_DEBUG      debug-level message
+//	LOG_EMERG      system is unusable
+//	LOG_ALERT      action must be taken immediately
+//	LOG_CRIT       critical conditions
+//	LOG_ERR        error conditions
+//	LOG_WARNING    warning conditions
+//	LOG_NOTICE     normal, but significant, condition
+//	LOG_INFO       informational message
+//	LOG_DEBUG      debug-level message
 const (
 	LogLevelEmergency LogLevel = iota
 	LogLevelAlert
@@ -34,50 +34,23 @@ const (
 	LogLevelDebug  // Debug level, needs -vv
 )
 
-var logLevelToString = []string{
-	LogLevelEmergency: "EMERGENCY",
-	LogLevelAlert:     "ALERT",
-	LogLevelCritical:  "CRITICAL",
-	LogLevelError:     "ERROR",
-	LogLevelWarning:   "WARNING",
-	LogLevelNotice:    "NOTICE",
-	LogLevelInfo:      "INFO",
-	LogLevelDebug:     "DEBUG",
-}
+type logLevelChoices struct{}
 
-// String turns a LogLevel into a string
-func (l LogLevel) String() string {
-	if l >= LogLevel(len(logLevelToString)) {
-		return fmt.Sprintf("LogLevel(%d)", l)
+func (logLevelChoices) Choices() []string {
+	return []string{
+		LogLevelEmergency: "EMERGENCY",
+		LogLevelAlert:     "ALERT",
+		LogLevelCritical:  "CRITICAL",
+		LogLevelError:     "ERROR",
+		LogLevelWarning:   "WARNING",
+		LogLevelNotice:    "NOTICE",
+		LogLevelInfo:      "INFO",
+		LogLevelDebug:     "DEBUG",
 	}
-	return logLevelToString[l]
 }
 
-// Set a LogLevel
-func (l *LogLevel) Set(s string) error {
-	for n, name := range logLevelToString {
-		if s != "" && name == s {
-			*l = LogLevel(n)
-			return nil
-		}
-	}
-	return fmt.Errorf("unknown log level %q", s)
-}
-
-// Type of the value
-func (l *LogLevel) Type() string {
-	return "string"
-}
-
-// UnmarshalJSON makes sure the value can be parsed as a string or integer in JSON
-func (l *LogLevel) UnmarshalJSON(in []byte) error {
-	return UnmarshalJSONFlag(in, l, func(i int64) error {
-		if i < 0 || i >= int64(LogLevel(len(logLevelToString))) {
-			return fmt.Errorf("unknown log level %d", i)
-		}
-		*l = (LogLevel)(i)
-		return nil
-	})
+func (logLevelChoices) Type() string {
+	return "LogLevel"
 }
 
 // LogPrintPid enables process pid in log

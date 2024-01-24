@@ -1,6 +1,7 @@
 ---
 title: "Jottacloud"
 description: "Rclone docs for Jottacloud"
+versionIntroduced: "v1.43"
 ---
 
 # {{< icon "fa fa-cloud" >}} Jottacloud
@@ -13,12 +14,14 @@ it also provides white-label solutions to different companies, such as:
   * Telia Sky (sky.telia.no)
 * Tele2
   * Tele2 Cloud (mittcloud.tele2.se)
+* Onlime
+  * Onlime Cloud Storage (onlime.dk)
 * Elkjøp (with subsidiaries):
   * Elkjøp Cloud (cloud.elkjop.no)
   * Elgiganten Sweden (cloud.elgiganten.se)
   * Elgiganten Denmark (cloud.elgiganten.dk)
   * Giganti Cloud  (cloud.gigantti.fi)
-  * ELKO Clouud (cloud.elko.is)
+  * ELKO Cloud (cloud.elko.is)
 
 Most of the white-label versions are supported by this backend, although may require different
 authentication setup - described below.
@@ -34,10 +37,33 @@ and you have to choose the correct one when setting up the remote.
 
 ### Standard authentication
 
-To configure Jottacloud you will need to generate a personal security token in the Jottacloud web interface.
-You will the option to do in your [account security settings](https://www.jottacloud.com/web/secure)
-(for whitelabel version you need to find this page in its web interface).
-Note that the web interface may refer to this token as a JottaCli token.
+The standard authentication method used by the official service (jottacloud.com), as well as
+some of the whitelabel services, requires you to generate a single-use personal login token
+from the account security settings in the service's web interface. Log in to your account,
+go to "Settings" and then "Security", or use the direct link presented to you by rclone when
+configuring the remote: <https://www.jottacloud.com/web/secure>. Scroll down to the section
+"Personal login token", and click the "Generate" button. Note that if you are using a
+whitelabel service you probably can't use the direct link, you need to find the same page in
+their dedicated web interface, and also it may be in a different location than described above.
+
+To access your account from multiple instances of rclone, you need to configure each of them
+with a separate personal login token. E.g. you create a Jottacloud remote with rclone in one
+location, and copy the configuration file to a second location where you also want to run
+rclone and access the same remote. Then you need to replace the token for one of them, using
+the [config reconnect](https://rclone.org/commands/rclone_config_reconnect/) command, which
+requires you to generate a new personal login token and supply as input. If you do not
+do this, the token may easily end up being invalidated, resulting in both instances failing
+with an error message something along the lines of:
+
+    oauth2: cannot fetch token: 400 Bad Request
+    Response: {"error":"invalid_grant","error_description":"Stale token"}
+
+When this happens, you need to replace the token as described above to be able to use your
+remote again.
+
+All personal login tokens you have taken into use will be listed in the web interface under
+"My logged in devices", and from the right side of that list you can click the "X" button to
+revoke individual tokens.
 
 ### Legacy authentication
 
@@ -59,6 +85,18 @@ As Tele2-Com Hem merger was completed this authentication can be used for former
 Tele2 Cloud customers as no support for creating a CLI token exists, and additionally uses a separate
 authentication flow where the username is generated internally. To setup rclone to use Tele2 Cloud,
 choose Tele2 Cloud authentication in the setup. The rest of the setup is identical to the default setup.
+
+### Onlime Cloud Storage authentication
+
+Onlime has sold access to Jottacloud proper, while providing localized support to Danish Customers, but
+have recently set up their own hosting, transferring their customers from Jottacloud servers to their
+own ones.
+
+This, of course, necessitates using their servers for authentication, but otherwise functionality and
+architecture seems equivalent to Jottacloud.
+
+To setup rclone to use Onlime Cloud Storage, choose Onlime Cloud authentication in the setup. The rest
+of the setup is identical to the default setup.
 
 ## Configuration
 
@@ -103,6 +141,9 @@ Press Enter for the default (standard).
    / Tele2 Cloud authentication.
  4 | Use this if you are using Tele2 Cloud.
    \ (tele2)
+   / Onlime Cloud authentication.
+ 5 | Use this if you are using Onlime Cloud.
+   \ (onlime)
 config_type> 1
 Personal login token.
 Generate here: https://www.jottacloud.com/web/secure
@@ -192,7 +233,7 @@ them. Generally you should avoid these, unless you know what you are doing.
 
 ### --fast-list
 
-This remote supports `--fast-list` which allows you to use fewer
+This backend supports `--fast-list` which allows you to use fewer
 transactions in exchange for more memory. See the [rclone
 docs](/docs/#fast-list) for more details.
 
@@ -200,10 +241,11 @@ Note that the implementation in Jottacloud always uses only a single
 API request to get the entire list, so for large folders this could
 lead to long wait time before the first results are shown.
 
-Note also that with rclone version 1.58 and newer information about
-[MIME types](/overview/#mime-type) are not available when using `--fast-list`.
+Note also that with rclone version 1.58 and newer, information about
+[MIME types](/overview/#mime-type) and metadata item [utime](#metadata)
+are not available when using `--fast-list`.
 
-### Modified time and hashes
+### Modification times and hashes
 
 Jottacloud allows modification times to be set on objects accurate to 1
 second. These will be used to detect whether objects need syncing or
@@ -220,7 +262,7 @@ Small files will be cached in memory - see the
 [--jottacloud-md5-memory-limit](#jottacloud-md5-memory-limit) flag.
 When uploading from local disk the source checksum is always available,
 so this does not apply. Starting with rclone version 1.52 the same is
-true for crypted remotes (in older versions the crypt backend would not
+true for encrypted remotes (in older versions the crypt backend would not
 calculate hashes for uploads from local disk, so the Jottacloud
 backend had to do it as described above).
 
@@ -264,9 +306,76 @@ command which will display your usage limit (unless it is unlimited)
 and the current usage.
 
 {{< rem autogenerated options start" - DO NOT EDIT - instead edit fs.RegInfo in backend/jottacloud/jottacloud.go then run make backenddocs" >}}
+### Standard options
+
+Here are the Standard options specific to jottacloud (Jottacloud).
+
+#### --jottacloud-client-id
+
+OAuth Client Id.
+
+Leave blank normally.
+
+Properties:
+
+- Config:      client_id
+- Env Var:     RCLONE_JOTTACLOUD_CLIENT_ID
+- Type:        string
+- Required:    false
+
+#### --jottacloud-client-secret
+
+OAuth Client Secret.
+
+Leave blank normally.
+
+Properties:
+
+- Config:      client_secret
+- Env Var:     RCLONE_JOTTACLOUD_CLIENT_SECRET
+- Type:        string
+- Required:    false
+
 ### Advanced options
 
 Here are the Advanced options specific to jottacloud (Jottacloud).
+
+#### --jottacloud-token
+
+OAuth Access Token as a JSON blob.
+
+Properties:
+
+- Config:      token
+- Env Var:     RCLONE_JOTTACLOUD_TOKEN
+- Type:        string
+- Required:    false
+
+#### --jottacloud-auth-url
+
+Auth server URL.
+
+Leave blank to use the provider defaults.
+
+Properties:
+
+- Config:      auth_url
+- Env Var:     RCLONE_JOTTACLOUD_AUTH_URL
+- Type:        string
+- Required:    false
+
+#### --jottacloud-token-url
+
+Token server url.
+
+Leave blank to use the provider defaults.
+
+Properties:
+
+- Config:      token_url
+- Env Var:     RCLONE_JOTTACLOUD_TOKEN_URL
+- Type:        string
+- Required:    false
 
 #### --jottacloud-md5-memory-limit
 
@@ -335,8 +444,23 @@ Properties:
 
 - Config:      encoding
 - Env Var:     RCLONE_JOTTACLOUD_ENCODING
-- Type:        MultiEncoder
+- Type:        Encoding
 - Default:     Slash,LtGt,DoubleQuote,Colon,Question,Asterisk,Pipe,Del,Ctl,InvalidUtf8,Dot
+
+### Metadata
+
+Jottacloud has limited support for metadata, currently an extended set of timestamps.
+
+Here are the possible system metadata items for the jottacloud backend.
+
+| Name | Help | Type | Example | Read Only |
+|------|------|------|---------|-----------|
+| btime | Time of file birth (creation), read from rclone metadata | RFC 3339 | 2006-01-02T15:04:05.999999999Z07:00 | N |
+| content-type | MIME type, also known as media type | string | text/plain | **Y** |
+| mtime | Time of last modification, read from rclone metadata | RFC 3339 | 2006-01-02T15:04:05.999999999Z07:00 | N |
+| utime | Time of last upload, when current revision was created, generated by backend | RFC 3339 | 2006-01-02T15:04:05.999999999Z07:00 | **Y** |
+
+See the [metadata](/docs/#metadata) docs for more info.
 
 {{< rem autogenerated options stop >}}
 

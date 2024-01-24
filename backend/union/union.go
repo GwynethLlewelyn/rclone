@@ -1,3 +1,4 @@
+// Package union implements a virtual provider to join existing remotes.
 package union
 
 import (
@@ -6,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"path"
 	"path/filepath"
 	"strings"
@@ -213,9 +213,9 @@ func (f *Fs) Purge(ctx context.Context, dir string) error {
 
 // Copy src to this remote using server-side copy operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // Will only be called if src.Fs().Name() == f.Name()
 //
@@ -253,9 +253,9 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 
 // Move src to this remote using server-side move operations.
 //
-// This is stored with the remote path given
+// This is stored with the remote path given.
 //
-// It returns the destination Object and a possible error
+// It returns the destination Object and a possible error.
 //
 // Will only be called if src.Fs().Name() == f.Name()
 //
@@ -500,7 +500,7 @@ func (f *Fs) put(ctx context.Context, in io.Reader, src fs.ObjectInfo, stream bo
 			errs[i] = fmt.Errorf("%s: %w", u.Name(), err)
 			if len(upstreams) > 1 {
 				// Drain the input buffer to allow other uploads to continue
-				_, _ = io.Copy(ioutil.Discard, readers[i])
+				_, _ = io.Copy(io.Discard, readers[i])
 			}
 			return
 		}
@@ -756,14 +756,6 @@ func (f *Fs) create(ctx context.Context, path string) ([]*upstream.Fs, error) {
 	return f.createPolicy.Create(ctx, f.upstreams, path)
 }
 
-func (f *Fs) createEntries(entries ...upstream.Entry) ([]upstream.Entry, error) {
-	return f.createPolicy.CreateEntries(entries...)
-}
-
-func (f *Fs) search(ctx context.Context, path string) (*upstream.Fs, error) {
-	return f.searchPolicy.Search(ctx, f.upstreams, path)
-}
-
 func (f *Fs) searchEntries(entries ...upstream.Entry) (upstream.Entry, error) {
 	return f.searchPolicy.SearchEntries(entries...)
 }
@@ -800,6 +792,24 @@ func (f *Fs) Shutdown(ctx context.Context) error {
 	multithread(len(f.upstreams), func(i int) {
 		u := f.upstreams[i]
 		if do := u.Features().Shutdown; do != nil {
+			err := do(ctx)
+			if err != nil {
+				errs[i] = fmt.Errorf("%s: %w", u.Name(), err)
+			}
+		}
+	})
+	return errs.Err()
+}
+
+// CleanUp the trash in the Fs
+//
+// Implement this if you have a way of emptying the trash or
+// otherwise cleaning up old versions of files.
+func (f *Fs) CleanUp(ctx context.Context) error {
+	errs := Errors(make([]error, len(f.upstreams)))
+	multithread(len(f.upstreams), func(i int) {
+		u := f.upstreams[i]
+		if do := u.Features().CleanUp; do != nil {
 			err := do(ctx)
 			if err != nil {
 				errs[i] = fmt.Errorf("%s: %w", u.Name(), err)
@@ -867,6 +877,17 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		opt:       *opt,
 		upstreams: usedUpstreams,
 	}
+	// Correct root if definitely pointing to a file
+	if fserr == fs.ErrorIsFile {
+		f.root = path.Dir(f.root)
+		if f.root == "." || f.root == "/" {
+			f.root = ""
+		}
+	}
+	err = upstream.Prepare(f.upstreams)
+	if err != nil {
+		return nil, err
+	}
 	f.actionPolicy, err = policy.Get(opt.ActionPolicy)
 	if err != nil {
 		return nil, err
@@ -892,18 +913,23 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		ReadMetadata:            true,
 		WriteMetadata:           true,
 		UserMetadata:            true,
+		PartialUploads:          true,
 	}).Fill(ctx, f)
-	canMove := true
+	canMove, slowHash := true, false
 	for _, f := range upstreams {
 		features = features.Mask(ctx, f) // Mask all upstream fs
 		if !operations.CanServerSideMove(f) {
 			canMove = false
 		}
+		slowHash = slowHash || f.Features().SlowHash
 	}
 	// We can move if all remotes support Move or Copy
 	if canMove {
 		features.Move = f.Move
 	}
+
+	// If any of upstreams are SlowHash, propagate it
+	features.SlowHash = slowHash
 
 	// Enable ListR when upstreams either support ListR or is local
 	// But not when all upstreams are local
@@ -917,6 +943,9 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			}
 		}
 	}
+
+	// show that we wrap other backends
+	features.Overlay = true
 
 	f.features = features
 
@@ -964,4 +993,5 @@ var (
 	_ fs.Abouter         = (*Fs)(nil)
 	_ fs.ListRer         = (*Fs)(nil)
 	_ fs.Shutdowner      = (*Fs)(nil)
+	_ fs.CleanUpper      = (*Fs)(nil)
 )

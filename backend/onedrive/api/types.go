@@ -1,5 +1,4 @@
-// Types passed and returned to and from the API
-
+// Package api provides types used by the OneDrive API.
 package api
 
 import (
@@ -14,7 +13,7 @@ const (
 	PackageTypeOneNote = "oneNote"
 )
 
-// Error is returned from one drive when things go wrong
+// Error is returned from OneDrive when things go wrong
 type Error struct {
 	ErrorInfo struct {
 		Code       string `json:"code"`
@@ -71,7 +70,7 @@ type Drive struct {
 	Quota     Quota       `json:"quota"`
 }
 
-// Timestamp represents represents date and time information for the
+// Timestamp represents date and time information for the
 // OneDrive API, by using ISO 8601 and is always in UTC time.
 type Timestamp time.Time
 
@@ -98,6 +97,16 @@ type ItemReference struct {
 	ID        string `json:"id"`        // Unique identifier for the item.	Read/Write.
 	Path      string `json:"path"`      // Path that used to navigate to the item.	Read/Write.
 	DriveType string `json:"driveType"` // Type of the drive,	Read-Only
+}
+
+// GetID returns a normalized ID of the item
+// If DriveID is known it will be prefixed to the ID with # separator
+// Can be parsed using onedrive.parseNormalizedID(normalizedID)
+func (i *ItemReference) GetID() string {
+	if !strings.Contains(i.ID, "#") {
+		return i.DriveID + "#" + i.ID
+	}
+	return i.ID
 }
 
 // RemoteItemFacet groups data needed to reference a OneDrive remote item
@@ -127,6 +136,7 @@ type HashesType struct {
 	Sha1Hash     string `json:"sha1Hash"`     // hex encoded SHA1 hash for the contents of the file (if available)
 	Crc32Hash    string `json:"crc32Hash"`    // hex encoded CRC32 value of the file (if available)
 	QuickXorHash string `json:"quickXorHash"` // base64 encoded QuickXorHash value of the file (if available)
+	Sha256Hash   string `json:"sha256Hash"`   // hex encoded SHA256 value of the file (if available)
 }
 
 // FileFacet groups file-related data on OneDrive into a single structure.
@@ -185,8 +195,8 @@ type Item struct {
 	Deleted *DeletedFacet `json:"deleted"` // Information about the deleted state of the item. Read-only.
 }
 
-// ViewDeltaResponse is the response to the view delta method
-type ViewDeltaResponse struct {
+// DeltaResponse is the response to the view delta method
+type DeltaResponse struct {
 	Value      []Item `json:"value"`            // An array of Item objects which have been created, modified, or deleted.
 	NextLink   string `json:"@odata.nextLink"`  // A URL to retrieve the next available page of changes.
 	DeltaLink  string `json:"@odata.deltaLink"` // A URL returned instead of @odata.nextLink after all current changes have been returned. Used to read the next set of changes in the future.
@@ -250,8 +260,8 @@ type MoveItemRequest struct {
 	FileSystemInfo  *FileSystemInfoFacet `json:"fileSystemInfo,omitempty"`  // File system information on client. Read-write.
 }
 
-//CreateShareLinkRequest is the request to create a sharing link
-//Always Type:view and Scope:anonymous for public sharing
+// CreateShareLinkRequest is the request to create a sharing link
+// Always Type:view and Scope:anonymous for public sharing
 type CreateShareLinkRequest struct {
 	Type     string     `json:"type"`                         // Link type in View, Edit or Embed
 	Scope    string     `json:"scope,omitempty"`              // Scope in anonymous, organization
@@ -259,7 +269,7 @@ type CreateShareLinkRequest struct {
 	Expiry   *time.Time `json:"expirationDateTime,omitempty"` // A String with format of yyyy-MM-ddTHH:mm:ssZ of DateTime indicates the expiration time of the permission.
 }
 
-//CreateShareLinkResponse is the response from CreateShareLinkRequest
+// CreateShareLinkResponse is the response from CreateShareLinkRequest
 type CreateShareLinkResponse struct {
 	ID    string   `json:"id"`
 	Roles []string `json:"roles"`
@@ -437,4 +447,28 @@ type Version struct {
 // VersionsResponse is returned from /versions
 type VersionsResponse struct {
 	Versions []Version `json:"value"`
+}
+
+// DriveResource is returned from /me/drive
+type DriveResource struct {
+	DriveID   string `json:"id"`
+	DriveName string `json:"name"`
+	DriveType string `json:"driveType"`
+}
+
+// DrivesResponse is returned from /sites/{siteID}/drives",
+type DrivesResponse struct {
+	Drives []DriveResource `json:"value"`
+}
+
+// SiteResource is part of the response from from "/sites/root:"
+type SiteResource struct {
+	SiteID   string `json:"id"`
+	SiteName string `json:"displayName"`
+	SiteURL  string `json:"webUrl"`
+}
+
+// SiteResponse is returned from "/sites/root:"
+type SiteResponse struct {
+	Sites []SiteResource `json:"value"`
 }

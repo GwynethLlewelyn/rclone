@@ -1,6 +1,7 @@
 ---
 title: "Remote Control / API"
 description: "Remote controlling rclone with its API"
+versionIntroduced: "v1.40"
 ---
 
 # Remote controlling rclone with its API
@@ -40,6 +41,11 @@ SSL PEM Private key
 ### --rc-max-header-bytes=VALUE
 
 Maximum size of request header (default 4096)
+
+### --rc-min-tls-version=VALUE
+
+The minimum TLS version that is acceptable. Valid values are "tls1.0",
+"tls1.1", "tls1.2" and "tls1.3" (default "tls1.0").
 
 ### --rc-user=VALUE
 
@@ -298,7 +304,7 @@ parameter, you would pass this parameter in your JSON blob.
 
 If using `rclone rc` this could be passed as
 
-    rclone rc operations/sync ... _config='{"CheckSum": true}'
+    rclone rc sync/sync ... _config='{"CheckSum": true}'
 
 Any config parameters you don't set will inherit the global defaults
 which were set with command line flags or environment variables.
@@ -397,7 +403,7 @@ The parameters can be a string as per the rest of rclone, eg
 `s3:bucket/path` or `:sftp:/my/dir`. They can also be specified as
 JSON blobs.
 
-If specifyng a JSON blob it should be a object mapping strings to
+If specifying a JSON blob it should be a object mapping strings to
 strings. These values will be used to configure the remote. There are
 3 special values which may be set:
 
@@ -580,7 +586,7 @@ See the [config dump](/commands/rclone_config_dump/) command for more informatio
 
 **Authentication is required for this call.**
 
-### config/listremotes: Lists the remotes in the config file. {#config-listremotes}
+### config/listremotes: Lists the remotes in the config file and defined in environment variables. {#config-listremotes}
 
 Returns
 - remotes - array of remote names
@@ -607,6 +613,14 @@ Returns a JSON object:
 - providers - array of objects
 
 See the [config providers](/commands/rclone_config_providers/) command for more information on the above.
+
+**Authentication is required for this call.**
+
+### config/setpath: Set the path of the config file {#config-setpath}
+
+Parameters:
+
+- path - path to the config file to use
 
 **Authentication is required for this call.**
 
@@ -708,7 +722,7 @@ Returns:
 	"result": "<Raw command line output>"
 }
 
-OR 
+OR
 {
 	"error": true,
 	"result": "<Raw command line output>"
@@ -717,6 +731,28 @@ OR
 ```
 
 **Authentication is required for this call.**
+
+### core/du: Returns disk usage of a locally attached disk. {#core-du}
+
+This returns the disk usage for the local directory passed in as dir.
+
+If the directory is not passed in, it defaults to the directory
+pointed to by --cache-dir.
+
+- dir - string (optional)
+
+Returns:
+
+```
+{
+	"dir": "/",
+	"info": {
+		"Available": 361769115648,
+		"Free": 361785892864,
+		"Total": 982141468672
+	}
+}
+```
 
 ### core/gc: Runs a garbage collection. {#core-gc}
 
@@ -797,6 +833,10 @@ Returns the following values:
 	"lastError": last error string,
 	"renames" : number of files renamed,
 	"retryError": boolean showing whether there has been at least one non-NoRetryError,
+        "serverSideCopies": number of server side copies done,
+        "serverSideCopyBytes": number bytes server side copied,
+        "serverSideMoves": number of server side moves done,
+        "serverSideMoveBytes": number bytes server side moved,
 	"speed": average speed in bytes per second since start of the group,
 	"totalBytes": total number of bytes in the group,
 	"totalChecks": total number of checks in the group,
@@ -903,6 +943,22 @@ Parameters:
 
 - rate - int
 
+### debug/set-gc-percent: Call runtime/debug.SetGCPercent for setting the garbage collection target percentage. {#debug-set-gc-percent}
+
+SetGCPercent sets the garbage collection target percentage: a collection is triggered
+when the ratio of freshly allocated data to live data remaining after the previous collection
+reaches this percentage. SetGCPercent returns the previous setting. The initial setting is the
+value of the GOGC environment variable at startup, or 100 if the variable is not set.
+
+This setting may be effectively reduced in order to maintain a memory limit.
+A negative percentage effectively disables garbage collection, unless the memory limit is reached.
+
+See https://pkg.go.dev/runtime/debug#SetMemoryLimit for more details.
+
+Parameters:
+
+- gc-percent - int
+
 ### debug/set-mutex-profile-fraction: Set runtime.SetMutexProfileFraction for mutex profiling. {#debug-set-mutex-profile-fraction}
 
 SetMutexProfileFraction controls the fraction of mutex contention
@@ -923,6 +979,38 @@ Parameters:
 Results:
 
 - previousRate - int
+
+### debug/set-soft-memory-limit: Call runtime/debug.SetMemoryLimit for setting a soft memory limit for the runtime. {#debug-set-soft-memory-limit}
+
+SetMemoryLimit provides the runtime with a soft memory limit.
+
+The runtime undertakes several processes to try to respect this memory limit, including
+adjustments to the frequency of garbage collections and returning memory to the underlying
+system more aggressively. This limit will be respected even if GOGC=off (or, if SetGCPercent(-1) is executed).
+
+The input limit is provided as bytes, and includes all memory mapped, managed, and not
+released by the Go runtime. Notably, it does not account for space used by the Go binary
+and memory external to Go, such as memory managed by the underlying system on behalf of
+the process, or memory managed by non-Go code inside the same process.
+Examples of excluded memory sources include: OS kernel memory held on behalf of the process,
+memory allocated by C code, and memory mapped by syscall.Mmap (because it is not managed by the Go runtime).
+
+A zero limit or a limit that's lower than the amount of memory used by the Go runtime may cause
+the garbage collector to run nearly continuously. However, the application may still make progress.
+
+The memory limit is always respected by the Go runtime, so to effectively disable this behavior,
+set the limit very high. math.MaxInt64 is the canonical value for disabling the limit, but values
+much greater than the available memory on the underlying system work just as well.
+
+See https://go.dev/doc/gc-guide for a detailed guide explaining the soft memory limit in more detail,
+as well as a variety of common use-cases and scenarios.
+
+SetMemoryLimit returns the previously set memory limit. A negative input does not adjust the limit,
+and allows for retrieval of the currently set memory limit.
+
+Parameters:
+
+- mem-limit - int
 
 ### fscache/clear: Clear the Fs cache. {#fscache-clear}
 
@@ -950,7 +1038,8 @@ Parameters: None.
 
 Results:
 
-- jobids - array of integer job ids.
+- executeId - string id of rclone executing (change after restart)
+- jobids - array of integer job ids (starting at 1 on each restart)
 
 ### job/status: Reads the status of the job ID {#job-status}
 
@@ -976,6 +1065,12 @@ Results:
 Parameters:
 
 - jobid - id of the job (integer).
+
+### job/stopgroup: Stop all running jobs in a group {#job-stopgroup}
+
+Parameters:
+
+- group - name of the group (string).
 
 ### mount/listmounts: Show current mount points {#mount-listmounts}
 
@@ -1052,9 +1147,11 @@ Example:
 
 **Authentication is required for this call.**
 
-### mount/unmountall: Show current mount points {#mount-unmountall}
+### mount/unmountall: Unmount all active mounts {#mount-unmountall}
 
-This shows currently mounted points, which can be used for performing an unmount.
+rclone allows Linux, FreeBSD, macOS and Windows to
+mount any of Rclone's cloud storage systems as a file system with
+FUSE.
 
 This takes no parameters and returns error if unmount does not succeed.
 
@@ -1076,6 +1173,56 @@ See the [about](/commands/rclone_about/) command for more information on the abo
 
 **Authentication is required for this call.**
 
+### operations/check: check the source and destination are the same {#operations-check}
+
+Checks the files in the source and destination match.  It compares
+sizes and hashes and logs a report of files that don't
+match.  It doesn't alter the source or destination.
+
+This takes the following parameters:
+
+- srcFs - a remote name string e.g. "drive:" for the source, "/" for local filesystem
+- dstFs - a remote name string e.g. "drive2:" for the destination, "/" for local filesystem
+- download - check by downloading rather than with hash
+- checkFileHash - treat checkFileFs:checkFileRemote as a SUM file with hashes of given type
+- checkFileFs - treat checkFileFs:checkFileRemote as a SUM file with hashes of given type
+- checkFileRemote - treat checkFileFs:checkFileRemote as a SUM file with hashes of given type
+- oneWay -  check one way only, source files must exist on remote
+- combined - make a combined report of changes (default false)
+- missingOnSrc - report all files missing from the source (default true)
+- missingOnDst - report all files missing from the destination (default true)
+- match - report all matching files (default false)
+- differ - report all non-matching files (default true)
+- error - report all files with errors (hashing or reading) (default true)
+
+If you supply the download flag, it will download the data from
+both remotes and check them against each other on the fly.  This can
+be useful for remotes that don't support hashes or if you really want
+to check all the data.
+
+If you supply the size-only global flag, it will only compare the sizes not
+the hashes as well.  Use this for a quick check.
+
+If you supply the checkFileHash option with a valid hash name, the
+checkFileFs:checkFileRemote must point to a text file in the SUM
+format. This treats the checksum file as the source and dstFs as the
+destination. Note that srcFs is not used and should not be supplied in
+this case.
+
+Returns:
+
+- success - true if no error, false otherwise
+- status - textual summary of check, OK or text string
+- hashType - hash used in check, may be missing
+- combined - array of strings of combined report of changes
+- missingOnSrc - array of strings of all files missing from the source
+- missingOnDst - array of strings of all files missing from the destination
+- match - array of strings of all matching files
+- differ - array of strings of all non-matching files
+- error - array of strings of all files with errors (hashing or reading)
+
+**Authentication is required for this call.**
+
 ### operations/cleanup: Remove trashed files in the remote or path {#operations-cleanup}
 
 This takes the following parameters:
@@ -1090,9 +1237,9 @@ See the [cleanup](/commands/rclone_cleanup/) command for more information on the
 
 This takes the following parameters:
 
-- srcFs - a remote name string e.g. "drive:" for the source
+- srcFs - a remote name string e.g. "drive:" for the source, "/" for local filesystem
 - srcRemote - a path within that remote e.g. "file.txt" for the source
-- dstFs - a remote name string e.g. "drive2:" for the destination
+- dstFs - a remote name string e.g. "drive2:" for the destination, "/" for local filesystem
 - dstRemote - a path within that remote e.g. "file2.txt" for the destination
 
 **Authentication is required for this call.**
@@ -1287,9 +1434,9 @@ See the [mkdir](/commands/rclone_mkdir/) command for more information on the abo
 
 This takes the following parameters:
 
-- srcFs - a remote name string e.g. "drive:" for the source
+- srcFs - a remote name string e.g. "drive:" for the source, "/" for local filesystem
 - srcRemote - a path within that remote e.g. "file.txt" for the source
-- dstFs - a remote name string e.g. "drive2:" for the destination
+- dstFs - a remote name string e.g. "drive2:" for the destination, "/" for local filesystem
 - dstRemote - a path within that remote e.g. "file2.txt" for the destination
 
 **Authentication is required for this call.**
@@ -1342,6 +1489,27 @@ This takes the following parameters:
 - leaveRoot - boolean, set to true not to delete the root
 
 See the [rmdirs](/commands/rclone_rmdirs/) command for more information on the above.
+
+**Authentication is required for this call.**
+
+### operations/settier: Changes storage tier or class on all files in the path {#operations-settier}
+
+This takes the following parameters:
+
+- fs - a remote name string e.g. "drive:"
+
+See the [settier](/commands/rclone_settier/) command for more information on the above.
+
+**Authentication is required for this call.**
+
+### operations/settierfile: Changes storage tier or class on the single file pointed to {#operations-settierfile}
+
+This takes the following parameters:
+
+- fs - a remote name string e.g. "drive:"
+- remote - a path within that remote e.g. "dir"
+
+See the [settierfile](/commands/rclone_settierfile/) command for more information on the above.
 
 **Authentication is required for this call.**
 
@@ -1568,7 +1736,7 @@ check that parameter passing is working properly.
 
 **Authentication is required for this call.**
 
-### sync/bisync: Perform bidirectonal synchronization between two paths. {#sync-bisync}
+### sync/bisync: Perform bidirectional synchronization between two paths. {#sync-bisync}
 
 This takes the following parameters
 
@@ -1580,11 +1748,16 @@ This takes the following parameters
 - checkFilename - file name for checkAccess (default: RCLONE_TEST)
 - maxDelete - abort sync if percentage of deleted files is above
   this threshold (default: 50)
-- force - maxDelete safety check and run the sync
+- force - Bypass maxDelete safety check and run the sync
 - checkSync - `true` by default, `false` disables comparison of final listings,
               `only` will skip sync, only compare listings from the last run
+- createEmptySrcDirs - Sync creation and deletion of empty directories. 
+			  (Not compatible with --remove-empty-dirs)
 - removeEmptyDirs - remove empty directories at the final cleanup step
 - filtersFile - read filtering patterns from a file
+- ignoreListingChecksum - Do not use checksums for listings
+- resilient - Allow future runs to retry after certain less-serious errors, instead of requiring resync. 
+            Use at your own risk!
 - workdir - server directory for history files (default: /home/ncw/.cache/rclone/bisync)
 - noCleanup - retain working files
 

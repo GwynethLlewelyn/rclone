@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -13,8 +12,7 @@ import (
 	"sync"
 	"time"
 
-	sysdnotify "github.com/iguanesolutions/go-systemd/v5/notify"
-
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/rclone/rclone/cmd/mountlib"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
@@ -88,7 +86,7 @@ func NewDriver(ctx context.Context, root string, mntOpt *mountlib.Options, vfsOp
 	})
 
 	// notify systemd
-	if err := sysdnotify.Ready(); err != nil {
+	if _, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
 		return nil, fmt.Errorf("failed to notify systemd: %w", err)
 	}
 
@@ -101,7 +99,10 @@ func (drv *Driver) Exit() {
 	drv.mu.Lock()
 	defer drv.mu.Unlock()
 
-	reportErr(sysdnotify.Stopping())
+	reportErr(func() error {
+		_, err := daemon.SdNotify(false, daemon.SdNotifyStopping)
+		return err
+	}())
 	drv.monChan <- true // ask monitor to exit
 	for _, vol := range drv.volumes {
 		reportErr(vol.unmountAll())
@@ -329,7 +330,7 @@ func (drv *Driver) saveState() error {
 	ctx := context.Background()
 	retries := fs.GetConfig(ctx).LowLevelRetries
 	for i := 0; i <= retries; i++ {
-		err = ioutil.WriteFile(drv.statePath, data, 0600)
+		err = os.WriteFile(drv.statePath, data, 0600)
 		if err == nil {
 			return nil
 		}
@@ -342,7 +343,7 @@ func (drv *Driver) saveState() error {
 func (drv *Driver) restoreState(ctx context.Context) error {
 	fs.Debugf(nil, "Restore state from %s", drv.statePath)
 
-	data, err := ioutil.ReadFile(drv.statePath)
+	data, err := os.ReadFile(drv.statePath)
 	if os.IsNotExist(err) {
 		return nil
 	}

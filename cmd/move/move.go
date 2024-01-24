@@ -1,3 +1,4 @@
+// Package move provides the move command.
 package move
 
 import (
@@ -20,8 +21,8 @@ var (
 func init() {
 	cmd.Root.AddCommand(commandDefinition)
 	cmdFlags := commandDefinition.Flags()
-	flags.BoolVarP(cmdFlags, &deleteEmptySrcDirs, "delete-empty-src-dirs", "", deleteEmptySrcDirs, "Delete empty source dirs after move")
-	flags.BoolVarP(cmdFlags, &createEmptySrcDirs, "create-empty-src-dirs", "", createEmptySrcDirs, "Create empty source dirs on destination after move")
+	flags.BoolVarP(cmdFlags, &deleteEmptySrcDirs, "delete-empty-src-dirs", "", deleteEmptySrcDirs, "Delete empty source dirs after move", "")
+	flags.BoolVarP(cmdFlags, &createEmptySrcDirs, "create-empty-src-dirs", "", createEmptySrcDirs, "Create empty source dirs on destination after move", "")
 }
 
 var commandDefinition = &cobra.Command{
@@ -59,6 +60,10 @@ can speed transfers up greatly.
 
 **Note**: Use the |-P|/|--progress| flag to view real-time transfer statistics.
 `, "|", "`"),
+	Annotations: map[string]string{
+		"versionIntroduced": "v1.19",
+		"groups":            "Filter,Listing,Important,Copy",
+	},
 	Run: func(command *cobra.Command, args []string) {
 		cmd.CheckArgs(2, 2, command, args)
 		fsrc, srcFileName, fdst := cmd.NewFsSrcFileDst(args)
