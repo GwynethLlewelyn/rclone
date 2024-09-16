@@ -5,7 +5,7 @@ go 1.20
 require (
 	bazil.org/fuse v0.0.0-20230120002735-62a210ff1fd5
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.9.1
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.4.0
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.5.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azfile v1.1.1
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358
@@ -18,7 +18,7 @@ require (
 	github.com/anacrolix/dms v1.6.0
 	github.com/anacrolix/log v0.14.5
 	github.com/atotto/clipboard v0.1.4
-	github.com/aws/aws-sdk-go v1.49.20
+	github.com/aws/aws-sdk-go v1.50.2
 	github.com/buengese/sgzip v0.1.1
 	github.com/cloudsoda/go-smb2 v0.0.0-20231124195312-f3ec8ae2c891
 	github.com/colinmarc/hdfs/v2 v2.4.0
@@ -30,8 +30,8 @@ require (
 	github.com/gdamore/tcell/v2 v2.7.0
 	github.com/go-chi/chi/v5 v5.0.11
 	github.com/go-git/go-billy/v5 v5.5.0
-	github.com/google/uuid v1.5.0
-	github.com/hanwen/go-fuse/v2 v2.4.0
+	github.com/google/uuid v1.6.0
+	github.com/hanwen/go-fuse/v2 v2.4.2
 	github.com/henrybear327/Proton-API-Bridge v1.0.0
 	github.com/henrybear327/go-proton-api v1.0.0
 	github.com/jcmturner/gokrb5/v8 v8.4.4
@@ -47,7 +47,7 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/moby/sys/mountinfo v0.7.1
 	github.com/ncw/swift/v2 v2.0.2
-	github.com/oracle/oci-go-sdk/v65 v65.55.1
+	github.com/oracle/oci-go-sdk/v65 v65.56.1
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/sftp v1.13.6
 	github.com/pmezard/go-difflib v1.0.0
@@ -55,6 +55,7 @@ require (
 	github.com/putdotio/go-putio/putio v0.0.0-20200123120452-16d982cac2b8
 	github.com/rfjakob/eme v1.1.2
 	github.com/rivo/uniseg v0.4.4
+	github.com/rogpeppe/go-internal v1.11.0
 	github.com/shirou/gopsutil/v3 v3.23.12
 	github.com/sirupsen/logrus v1.9.3
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
@@ -70,13 +71,14 @@ require (
 	go.etcd.io/bbolt v1.3.8
 	goftp.io/server/v2 v2.0.1
 	golang.org/x/crypto v0.18.0
+	golang.org/x/exp v0.0.0-20240119083558-1b970713d09a
 	golang.org/x/net v0.20.0
 	golang.org/x/oauth2 v0.16.0
 	golang.org/x/sync v0.6.0
 	golang.org/x/sys v0.16.0
 	golang.org/x/text v0.14.0
 	golang.org/x/time v0.5.0
-	google.golang.org/api v0.156.0
+	google.golang.org/api v0.157.0
 	gopkg.in/validator.v2 v2.0.1
 	gopkg.in/yaml.v2 v2.4.0
 	storj.io/uplink v1.12.2
@@ -143,7 +145,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20231016141302-07b5767bb0ed // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -153,12 +154,11 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
-	github.com/prometheus/common v0.45.0 // indirect
+	github.com/prometheus/common v0.46.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/relvacode/iso8601 v1.3.0 // indirect
 	github.com/rs/xid v1.5.0 // indirect
-	github.com/rogpeppe/go-internal v1.11.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/shabbyrobe/gocovmerge v0.0.0-20230507112040-c3350d9342df // indirect
@@ -172,28 +172,27 @@ require (
 	github.com/zeebo/blake3 v0.2.3 // indirect
 	github.com/zeebo/errs v1.3.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1 // indirect
-	go.opentelemetry.io/otel v1.21.0 // indirect
-	go.opentelemetry.io/otel/metric v1.21.0 // indirect
-	go.opentelemetry.io/otel/trace v1.21.0 // indirect
-	golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.47.0 // indirect
+	go.opentelemetry.io/otel v1.22.0 // indirect
+	go.opentelemetry.io/otel/metric v1.22.0 // indirect
+	go.opentelemetry.io/otel/trace v1.22.0 // indirect
 	golang.org/x/mod v0.14.0 // indirect
 	golang.org/x/tools v0.17.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240108191215-35c7eff3a6b1 // indirect
-	google.golang.org/grpc v1.60.1 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
+	google.golang.org/grpc v1.61.0 // indirect
 	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	storj.io/common v0.0.0-20240111121419-ecae1362576c // indirect
+	storj.io/common v0.0.0-20240116121339-670742423093 // indirect
 	storj.io/drpc v0.0.33 // indirect
 	storj.io/infectious v0.0.2 // indirect
-	storj.io/picobuf v0.0.2-0.20230906122608-c4ba17033c6c // indirect
+	storj.io/picobuf v0.0.3 // indirect
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
-	github.com/ProtonMail/go-crypto v0.0.0-20230923063757-afb1ddc0824c
+	github.com/ProtonMail/go-crypto v1.0.0
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/pkg/xattr v0.4.9
