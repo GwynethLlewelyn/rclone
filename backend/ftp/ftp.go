@@ -85,7 +85,7 @@ to an encrypted one. Cannot be used in combination with implicit FTPS.`,
 			Default: false,
 		}, {
 			Name: "concurrency",
-			Help: strings.Replace(`Maximum number of FTP simultaneous connections, 0 for unlimited.
+			Help: strings.ReplaceAll(`Maximum number of FTP simultaneous connections, 0 for unlimited.
 
 Note that setting this is very likely to cause deadlocks so it should
 be used with care.
@@ -99,7 +99,7 @@ maximum of |--checkers| and |--transfers|.
 So for |concurrency 3| you'd use |--checkers 2 --transfers 2
 --check-first| or |--checkers 1 --transfers 1|.
 
-`, "|", "`", -1),
+`, "|", "`"),
 			Default:  0,
 			Advanced: true,
 		}, {
@@ -970,6 +970,8 @@ func (f *Fs) mkdir(ctx context.Context, abspath string) error {
 	f.putFtpConnection(&c, err)
 	if errX := textprotoError(err); errX != nil {
 		switch errX.Code {
+		case ftp.StatusRequestedFileActionOK: // some ftp servers apparently return 250 instead of 257
+			err = nil // see: https://forum.rclone.org/t/rclone-pop-up-an-i-o-error-when-creating-a-folder-in-a-mounted-ftp-drive/44368/
 		case ftp.StatusFileUnavailable: // dir already exists: see issue #2181
 			err = nil
 		case 521: // dir already exists: error number according to RFC 959: issue #2363

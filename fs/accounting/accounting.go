@@ -39,6 +39,12 @@ func Start(ctx context.Context) {
 
 	// Start the transactions per second limiter
 	StartLimitTPS(ctx)
+
+	// Set the error count function pointer up in fs
+	//
+	// We can't do this in an init() method as it uses fs.Config
+	// and that isn't set up then.
+	fs.CountError = GlobalStats().Error
 }
 
 // Account limits and accounts for one transfer
@@ -521,7 +527,7 @@ func (acc *Account) String() string {
 	}
 
 	if acc.ci.DataRateUnit == "bits" {
-		cur = cur * 8
+		cur *= 8
 	}
 
 	percentageDone := 0
@@ -539,9 +545,8 @@ func (acc *Account) String() string {
 	)
 }
 
-// rcStats produces remote control stats for this file
-func (acc *Account) rcStats() (out rc.Params) {
-	out = make(rc.Params)
+// rcStats adds remote control stats for this file
+func (acc *Account) rcStats(out rc.Params) {
 	a, b := acc.progress()
 	out["bytes"] = a
 	out["size"] = b
@@ -563,8 +568,6 @@ func (acc *Account) rcStats() (out rc.Params) {
 	}
 	out["percentage"] = percentageDone
 	out["group"] = acc.stats.group
-
-	return out
 }
 
 // OldStream returns the top io.Reader
@@ -606,7 +609,7 @@ func (a *accountStream) SetStream(in io.Reader) {
 	a.in = in
 }
 
-// WrapStream wrap in in an accounter
+// WrapStream wrap in an accounter
 func (a *accountStream) WrapStream(in io.Reader) io.Reader {
 	return a.acc.WrapStream(in)
 }
