@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,8 +38,8 @@ import (
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/fspath"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/fs/list"
 	"github.com/rclone/rclone/fs/operations"
-	"github.com/rclone/rclone/fs/walk"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/encoder"
 	"github.com/rclone/rclone/lib/env"
@@ -80,9 +81,10 @@ const (
 // Globals
 var (
 	// Description of how to auth for this app
-	driveConfig = &oauth2.Config{
+	driveConfig = &oauthutil.Config{
 		Scopes:       []string{scopePrefix + "drive"},
-		Endpoint:     google.Endpoint,
+		AuthURL:      google.Endpoint.AuthURL,
+		TokenURL:     google.Endpoint.TokenURL,
 		ClientID:     rcloneClientID,
 		ClientSecret: obscure.MustReveal(rcloneEncryptedClientSecret),
 		RedirectURL:  oauthutil.RedirectURL,
@@ -120,6 +122,7 @@ var (
 		"text/html":                 ".html",
 		"text/plain":                ".txt",
 		"text/tab-separated-values": ".tsv",
+		"text/markdown":             ".md",
 	}
 	_mimeTypeToExtensionLinks = map[string]string{
 		"application/x-link-desktop": ".desktop",
@@ -188,7 +191,7 @@ func driveScopes(scopesString string) (scopes []string) {
 	if scopesString == "" {
 		scopesString = defaultScope
 	}
-	for _, scope := range strings.Split(scopesString, ",") {
+	for scope := range strings.SplitSeq(scopesString, ",") {
 		scope = strings.TrimSpace(scope)
 		scopes = append(scopes, scopePrefix+scope)
 	}
@@ -197,13 +200,7 @@ func driveScopes(scopesString string) (scopes []string) {
 
 // Returns true if one of the scopes was "drive.appfolder"
 func driveScopesContainsAppFolder(scopes []string) bool {
-	for _, scope := range scopes {
-		if scope == scopePrefix+"drive.appfolder" {
-			return true
-		}
-
-	}
-	return false
+	return slices.Contains(scopes, scopePrefix+"drive.appfolder")
 }
 
 func driveOAuthOptions() []fs.Option {
@@ -957,12 +954,7 @@ func parseDrivePath(path string) (root string, err error) {
 type listFn func(*drive.File) bool
 
 func containsString(slice []string, s string) bool {
-	for _, e := range slice {
-		if e == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, s)
 }
 
 // getFile returns drive.File for the ID passed and fields passed in
@@ -1151,13 +1143,7 @@ OUTER:
 			// Check the case of items is correct since
 			// the `=` operator is case insensitive.
 			if title != "" && title != item.Name {
-				found := false
-				for _, stem := range stems {
-					if stem == item.Name {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(stems, item.Name)
 				if !found {
 					continue
 				}
@@ -1210,6 +1196,7 @@ func fixMimeType(mimeTypeIn string) string {
 	}
 	return mimeTypeOut
 }
+
 func fixMimeTypeMap(in map[string][]string) (out map[string][]string) {
 	out = make(map[string][]string, len(in))
 	for k, v := range in {
@@ -1220,9 +1207,11 @@ func fixMimeTypeMap(in map[string][]string) (out map[string][]string) {
 	}
 	return out
 }
+
 func isInternalMimeType(mimeType string) bool {
 	return strings.HasPrefix(mimeType, "application/vnd.google-apps.")
 }
+
 func isLinkMimeType(mimeType string) bool {
 	return strings.HasPrefix(mimeType, "application/x-link-")
 }
@@ -1231,7 +1220,7 @@ func isLinkMimeType(mimeType string) bool {
 // into a list of unique extensions with leading "." and a list of associated MIME types
 func parseExtensions(extensionsIn ...string) (extensions, mimeTypes []string, err error) {
 	for _, extensionText := range extensionsIn {
-		for _, extension := range strings.Split(extensionText, ",") {
+		for extension := range strings.SplitSeq(extensionText, ",") {
 			extension = strings.ToLower(strings.TrimSpace(extension))
 			if extension == "" {
 				continue
@@ -1557,13 +1546,10 @@ func (f *Fs) getFileFields(ctx context.Context) (fields googleapi.Field) {
 func (f *Fs) newRegularObject(ctx context.Context, remote string, info *drive.File) (obj fs.Object, err error) {
 	// wipe checksum if SkipChecksumGphotos and file is type Photo or Video
 	if f.opt.SkipChecksumGphotos {
-		for _, space := range info.Spaces {
-			if space == "photos" {
-				info.Md5Checksum = ""
-				info.Sha1Checksum = ""
-				info.Sha256Checksum = ""
-				break
-			}
+		if slices.Contains(info.Spaces, "photos") {
+			info.Md5Checksum = ""
+			info.Sha1Checksum = ""
+			info.Sha256Checksum = ""
 		}
 	}
 	o := &Object{
@@ -1655,7 +1641,8 @@ func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *drive.F
 // When the drive.File cannot be represented as an fs.Object it will return (nil, nil).
 func (f *Fs) newObjectWithExportInfo(
 	ctx context.Context, remote string, info *drive.File,
-	extension, exportName, exportMimeType string, isDocument bool) (o fs.Object, err error) {
+	extension, exportName, exportMimeType string, isDocument bool,
+) (o fs.Object, err error) {
 	// Note that resolveShortcut will have been called already if
 	// we are being called from a listing. However the drive.Item
 	// will have been resolved so this will do nothing.
@@ -1758,7 +1745,7 @@ func (f *Fs) createDir(ctx context.Context, pathID, leaf string, metadata fs.Met
 	}
 	var updateMetadata updateMetadataFn
 	if len(metadata) > 0 {
-		updateMetadata, err = f.updateMetadata(ctx, createInfo, metadata, true)
+		updateMetadata, err = f.updateMetadata(ctx, createInfo, metadata, true, true)
 		if err != nil {
 			return nil, fmt.Errorf("create dir: failed to update metadata: %w", err)
 		}
@@ -1789,7 +1776,7 @@ func (f *Fs) updateDir(ctx context.Context, dirID string, metadata fs.Metadata) 
 	}
 	dirID = actualID(dirID)
 	updateInfo := &drive.File{}
-	updateMetadata, err := f.updateMetadata(ctx, updateInfo, metadata, true)
+	updateMetadata, err := f.updateMetadata(ctx, updateInfo, metadata, true, true)
 	if err != nil {
 		return nil, fmt.Errorf("update dir: failed to update metadata from source object: %w", err)
 	}
@@ -1846,6 +1833,7 @@ func linkTemplate(mt string) *template.Template {
 	})
 	return _linkTemplates[mt]
 }
+
 func (f *Fs) fetchFormats(ctx context.Context) {
 	fetchFormatsOnce.Do(func() {
 		var about *drive.About
@@ -1891,7 +1879,8 @@ func (f *Fs) importFormats(ctx context.Context) map[string][]string {
 // Look through the exportExtensions and find the first format that can be
 // converted.  If none found then return ("", "", false)
 func (f *Fs) findExportFormatByMimeType(ctx context.Context, itemMimeType string) (
-	extension, mimeType string, isDocument bool) {
+	extension, mimeType string, isDocument bool,
+) {
 	exportMimeTypes, isDocument := f.exportFormats(ctx)[itemMimeType]
 	if isDocument {
 		for _, _extension := range f.exportExtensions {
@@ -1976,9 +1965,28 @@ func (f *Fs) findImportFormat(ctx context.Context, mimeType string) string {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+	return list.WithListP(ctx, dir, f)
+}
+
+// ListP lists the objects and directories of the Fs starting
+// from dir non recursively into out.
+//
+// dir should be "" to start from the root, and should not
+// have trailing slashes.
+//
+// This should return ErrDirNotFound if the directory isn't
+// found.
+//
+// It should call callback for each tranche of entries read.
+// These need not be returned in any particular order.  If
+// callback returns an error then the listing will stop
+// immediately.
+func (f *Fs) ListP(ctx context.Context, dir string, callback fs.ListRCallback) error {
+	list := list.NewHelper(callback)
+	entriesAdded := 0
 	directoryID, err := f.dirCache.FindDir(ctx, dir, false)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	directoryID = actualID(directoryID)
 
@@ -1990,25 +1998,30 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 			return true
 		}
 		if entry != nil {
-			entries = append(entries, entry)
+			err = list.Add(entry)
+			if err != nil {
+				iErr = err
+				return true
+			}
+			entriesAdded++
 		}
 		return false
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if iErr != nil {
-		return nil, iErr
+		return iErr
 	}
 	// If listing the root of a teamdrive and got no entries,
 	// double check we have access
-	if f.isTeamDrive && len(entries) == 0 && f.root == "" && dir == "" {
+	if f.isTeamDrive && entriesAdded == 0 && f.root == "" && dir == "" {
 		err = f.teamDriveOK(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return entries, nil
+	return list.Flush()
 }
 
 // listREntry is a task to be executed by a litRRunner
@@ -2200,7 +2213,7 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 	wg := sync.WaitGroup{}
 	in := make(chan listREntry, listRInputBuffer)
 	out := make(chan error, f.ci.Checkers)
-	list := walk.NewListRHelper(callback)
+	list := list.NewHelper(callback)
 	overflow := []listREntry{}
 	listed := 0
 
@@ -2238,7 +2251,7 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 	wg.Add(1)
 	in <- listREntry{directoryID, dir}
 
-	for i := 0; i < f.ci.Checkers; i++ {
+	for range f.ci.Checkers {
 		go f.listRRunner(ctx, &wg, in, out, cb, sendJob)
 	}
 	go func() {
@@ -2247,11 +2260,8 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 		// if the input channel overflowed add the collected entries to the channel now
 		for len(overflow) > 0 {
 			mu.Lock()
-			l := len(overflow)
 			// only fill half of the channel to prevent entries being put into overflow again
-			if l > listRInputBuffer/2 {
-				l = listRInputBuffer / 2
-			}
+			l := min(len(overflow), listRInputBuffer/2)
 			wg.Add(l)
 			for _, d := range overflow[:l] {
 				in <- d
@@ -2271,7 +2281,7 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 		mu.Unlock()
 	}()
 	// wait until the all workers to finish
-	for i := 0; i < f.ci.Checkers; i++ {
+	for range f.ci.Checkers {
 		e := <-out
 		mu.Lock()
 		// if one worker returns an error early, close the input so all other workers exit
@@ -2687,7 +2697,7 @@ func (f *Fs) purgeCheck(ctx context.Context, dir string, check bool) error {
 	if shortcutID != "" {
 		return f.delete(ctx, shortcutID, f.opt.UseTrash)
 	}
-	var trashedFiles = false
+	trashedFiles := false
 	if check {
 		found, err := f.list(ctx, []string{directoryID}, "", false, false, f.opt.TrashedOnly, true, func(item *drive.File) bool {
 			if !item.Trashed {
@@ -2924,7 +2934,6 @@ func (f *Fs) CleanUp(ctx context.Context) error {
 		err := f.svc.Files.EmptyTrash().Context(ctx).Do()
 		return f.shouldRetry(ctx, err)
 	})
-
 	if err != nil {
 		return err
 	}
@@ -3185,6 +3194,7 @@ func (f *Fs) ChangeNotify(ctx context.Context, notifyFunc func(string, fs.EntryT
 		}
 	}()
 }
+
 func (f *Fs) changeNotifyStartPageToken(ctx context.Context) (pageToken string, err error) {
 	var startPageToken *drive.StartPageToken
 	err = f.pacer.Call(func() (bool, error) {
@@ -3523,14 +3533,14 @@ func (f *Fs) unTrashDir(ctx context.Context, dir string, recurse bool) (r unTras
 	return f.unTrash(ctx, dir, directoryID, true)
 }
 
-// copy file with id to dest
-func (f *Fs) copyID(ctx context.Context, id, dest string) (err error) {
+// copy or move file with id to dest
+func (f *Fs) copyOrMoveID(ctx context.Context, operation string, id, dest string) (err error) {
 	info, err := f.getFile(ctx, id, f.getFileFields(ctx))
 	if err != nil {
 		return fmt.Errorf("couldn't find id: %w", err)
 	}
 	if info.MimeType == driveFolderType {
-		return fmt.Errorf("can't copy directory use: rclone copy --drive-root-folder-id %s %s %s", id, fs.ConfigString(f), dest)
+		return fmt.Errorf("can't %s directory use: rclone %s --drive-root-folder-id %s %s %s", operation, operation, id, fs.ConfigString(f), dest)
 	}
 	info.Name = f.opt.Enc.ToStandardName(info.Name)
 	o, err := f.newObjectWithInfo(ctx, info.Name, info)
@@ -3551,14 +3561,21 @@ func (f *Fs) copyID(ctx context.Context, id, dest string) (err error) {
 	if err != nil {
 		return err
 	}
-	_, err = operations.Copy(ctx, dstFs, nil, destLeaf, o)
-	if err != nil {
-		return fmt.Errorf("copy failed: %w", err)
+
+	var opErr error
+	if operation == "moveid" {
+		_, opErr = operations.Move(ctx, dstFs, nil, destLeaf, o)
+	} else {
+		_, opErr = operations.Copy(ctx, dstFs, nil, destLeaf, o)
+	}
+	if opErr != nil {
+		return fmt.Errorf("%s failed: %w", operation, opErr)
 	}
 	return nil
 }
 
-func (f *Fs) query(ctx context.Context, query string) (entries []*drive.File, err error) {
+// Run the drive query calling fn on each entry found
+func (f *Fs) queryFn(ctx context.Context, query string, fn func(*drive.File)) (err error) {
 	list := f.svc.Files.List()
 	if query != "" {
 		list.Q(query)
@@ -3577,10 +3594,7 @@ func (f *Fs) query(ctx context.Context, query string) (entries []*drive.File, er
 	if f.rootFolderID == "appDataFolder" {
 		list.Spaces("appDataFolder")
 	}
-
 	fields := fmt.Sprintf("files(%s),nextPageToken,incompleteSearch", f.getFileFields(ctx))
-
-	var results []*drive.File
 	for {
 		var files *drive.FileList
 		err = f.pacer.Call(func() (bool, error) {
@@ -3588,57 +3602,109 @@ func (f *Fs) query(ctx context.Context, query string) (entries []*drive.File, er
 			return f.shouldRetry(ctx, err)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to execute query: %w", err)
+			return fmt.Errorf("failed to execute query: %w", err)
 		}
 		if files.IncompleteSearch {
 			fs.Errorf(f, "search result INCOMPLETE")
 		}
-		results = append(results, files.Files...)
+		for _, item := range files.Files {
+			fn(item)
+		}
 		if files.NextPageToken == "" {
 			break
 		}
 		list.PageToken(files.NextPageToken)
 	}
+	return nil
+}
+
+// Run the drive query returning the entries found
+func (f *Fs) query(ctx context.Context, query string) (entries []*drive.File, err error) {
+	var results []*drive.File
+	err = f.queryFn(ctx, query, func(item *drive.File) {
+		results = append(results, item)
+	})
+	if err != nil {
+		return nil, err
+	}
 	return results, nil
+}
+
+// Rescue, list or delete orphaned files
+func (f *Fs) rescue(ctx context.Context, dirID string, delete bool) (err error) {
+	return f.queryFn(ctx, "'me' in owners and trashed=false", func(item *drive.File) {
+		if len(item.Parents) != 0 {
+			return
+		}
+		// Have found an orphaned entry
+		if delete {
+			fs.Infof(item.Name, "Deleting orphan %q into trash", item.Id)
+			err = f.delete(ctx, item.Id, true)
+			if err != nil {
+				fs.Errorf(item.Name, "Failed to delete orphan %q: %v", item.Id, err)
+			}
+		} else if dirID == "" {
+			operations.SyncPrintf("%q, %q\n", item.Name, item.Id)
+		} else {
+			fs.Infof(item.Name, "Rescuing orphan %q", item.Id)
+			err = f.pacer.Call(func() (bool, error) {
+				_, err = f.svc.Files.Update(item.Id, nil).
+					AddParents(dirID).
+					Fields(f.getFileFields(ctx)).
+					SupportsAllDrives(true).
+					Context(ctx).Do()
+				return f.shouldRetry(ctx, err)
+			})
+			if err != nil {
+				fs.Errorf(item.Name, "Failed to rescue orphan %q: %v", item.Id, err)
+			}
+		}
+	})
 }
 
 var commandHelp = []fs.CommandHelp{{
 	Name:  "get",
-	Short: "Get command for fetching the drive config parameters",
-	Long: `This is a get command which will be used to fetch the various drive config parameters
+	Short: "Get command for fetching the drive config parameters.",
+	Long: `This is a get command which will be used to fetch the various drive config
+parameters.
 
-Usage Examples:
+Usage examples:
 
-    rclone backend get drive: [-o service_account_file] [-o chunk_size]
-    rclone rc backend/command command=get fs=drive: [-o service_account_file] [-o chunk_size]
-`,
+` + "```console" + `
+rclone backend get drive: [-o service_account_file] [-o chunk_size]
+rclone rc backend/command command=get fs=drive: [-o service_account_file] [-o chunk_size]
+` + "```",
 	Opts: map[string]string{
-		"chunk_size":           "show the current upload chunk size",
-		"service_account_file": "show the current service account file",
+		"chunk_size":           "Show the current upload chunk size.",
+		"service_account_file": "Show the current service account file.",
 	},
 }, {
 	Name:  "set",
-	Short: "Set command for updating the drive config parameters",
-	Long: `This is a set command which will be used to update the various drive config parameters
+	Short: "Set command for updating the drive config parameters.",
+	Long: `This is a set command which will be used to update the various drive config
+parameters.
 
-Usage Examples:
+Usage examples:
 
-    rclone backend set drive: [-o service_account_file=sa.json] [-o chunk_size=67108864]
-    rclone rc backend/command command=set fs=drive: [-o service_account_file=sa.json] [-o chunk_size=67108864]
-`,
+` + "```console" + `
+rclone backend set drive: [-o service_account_file=sa.json] [-o chunk_size=67108864]
+rclone rc backend/command command=set fs=drive: [-o service_account_file=sa.json] [-o chunk_size=67108864]
+` + "```",
 	Opts: map[string]string{
-		"chunk_size":           "update the current upload chunk size",
-		"service_account_file": "update the current service account file",
+		"chunk_size":           "Update the current upload chunk size.",
+		"service_account_file": "Update the current service account file.",
 	},
 }, {
 	Name:  "shortcut",
-	Short: "Create shortcuts from files or directories",
+	Short: "Create shortcuts from files or directories.",
 	Long: `This command creates shortcuts from files or directories.
 
-Usage:
+Usage examples:
 
-    rclone backend shortcut drive: source_item destination_shortcut
-    rclone backend shortcut drive: source_item -o target=drive2: destination_shortcut
+` + "```console" + `
+rclone backend shortcut drive: source_item destination_shortcut
+rclone backend shortcut drive: source_item -o target=drive2: destination_shortcut
+` + "```" + `
 
 In the first example this creates a shortcut from the "source_item"
 which can be a file or a directory to the "destination_shortcut". The
@@ -3648,90 +3714,100 @@ from "drive:"
 In the second example this creates a shortcut from the "source_item"
 relative to "drive:" to the "destination_shortcut" relative to
 "drive2:". This may fail with a permission error if the user
-authenticated with "drive2:" can't read files from "drive:".
-`,
+authenticated with "drive2:" can't read files from "drive:".`,
 	Opts: map[string]string{
-		"target": "optional target remote for the shortcut destination",
+		"target": "Optional target remote for the shortcut destination.",
 	},
 }, {
 	Name:  "drives",
-	Short: "List the Shared Drives available to this account",
+	Short: "List the Shared Drives available to this account.",
 	Long: `This command lists the Shared Drives (Team Drives) available to this
 account.
 
-Usage:
+Usage example:
 
-    rclone backend [-o config] drives drive:
+` + "```console" + `
+rclone backend [-o config] drives drive:
+` + "```" + `
 
-This will return a JSON list of objects like this
+This will return a JSON list of objects like this:
 
-    [
-        {
-            "id": "0ABCDEF-01234567890",
-            "kind": "drive#teamDrive",
-            "name": "My Drive"
-        },
-        {
-            "id": "0ABCDEFabcdefghijkl",
-            "kind": "drive#teamDrive",
-            "name": "Test Drive"
-        }
-    ]
+` + "```json" + `
+[
+    {
+        "id": "0ABCDEF-01234567890",
+        "kind": "drive#teamDrive",
+        "name": "My Drive"
+    },
+    {
+        "id": "0ABCDEFabcdefghijkl",
+        "kind": "drive#teamDrive",
+        "name": "Test Drive"
+    }
+]
+` + "```" + `
 
 With the -o config parameter it will output the list in a format
 suitable for adding to a config file to make aliases for all the
 drives found and a combined drive.
 
-    [My Drive]
-    type = alias
-    remote = drive,team_drive=0ABCDEF-01234567890,root_folder_id=:
+` + "```ini" + `
+[My Drive]
+type = alias
+remote = drive,team_drive=0ABCDEF-01234567890,root_folder_id=:
 
-    [Test Drive]
-    type = alias
-    remote = drive,team_drive=0ABCDEFabcdefghijkl,root_folder_id=:
+[Test Drive]
+type = alias
+remote = drive,team_drive=0ABCDEFabcdefghijkl,root_folder_id=:
 
-    [AllDrives]
-    type = combine
-    upstreams = "My Drive=My Drive:" "Test Drive=Test Drive:"
+[AllDrives]
+type = combine
+upstreams = "My Drive=My Drive:" "Test Drive=Test Drive:"
+` + "```" + `
 
 Adding this to the rclone config file will cause those team drives to
 be accessible with the aliases shown. Any illegal characters will be
 substituted with "_" and duplicate names will have numbers suffixed.
 It will also add a remote called AllDrives which shows all the shared
-drives combined into one directory tree.
-`,
+drives combined into one directory tree.`,
 }, {
 	Name:  "untrash",
-	Short: "Untrash files and directories",
+	Short: "Untrash files and directories.",
 	Long: `This command untrashes all the files and directories in the directory
 passed in recursively.
 
-Usage:
+Usage example:
+
+` + "```console" + `
+rclone backend untrash drive:directory
+rclone backend --interactive untrash drive:directory subdir
+` + "```" + `
 
 This takes an optional directory to trash which make this easier to
 use via the API.
 
-    rclone backend untrash drive:directory
-    rclone backend --interactive untrash drive:directory subdir
-
-Use the --interactive/-i or --dry-run flag to see what would be restored before restoring it.
+Use the --interactive/-i or --dry-run flag to see what would be restored before
+restoring it.
 
 Result:
 
-    {
-        "Untrashed": 17,
-        "Errors": 0
-    }
-`,
+` + "```json" + `
+{
+    "Untrashed": 17,
+    "Errors": 0
+}
+` + "```",
 }, {
 	Name:  "copyid",
-	Short: "Copy files by ID",
-	Long: `This command copies files by ID
+	Short: "Copy files by ID.",
+	Long: `This command copies files by ID.
 
-Usage:
+Usage examples:
 
-    rclone backend copyid drive: ID path
-    rclone backend copyid drive: ID1 path1 ID2 path2
+` + "```console" + `
+rclone backend copyid drive: ID path
+rclone backend copyid drive: ID1 path1 ID2 path2
+` + "```" + `
 
 It copies the drive file with ID given to the path (an rclone path which
 will be passed internally to rclone copyto). The ID and path pairs can be
@@ -3744,55 +3820,122 @@ component will be used as the file name.
 If the destination is a drive backend then server-side copying will be
 attempted if possible.
 
-Use the --interactive/-i or --dry-run flag to see what would be copied before copying.
-`,
+Use the --interactive/-i or --dry-run flag to see what would be copied before
+copying.`,
+}, {
+	Name:  "moveid",
+	Short: "Move files by ID.",
+	Long: `This command moves files by ID.
+
+Usage examples:
+
+` + "```console" + `
+rclone backend moveid drive: ID path
+rclone backend moveid drive: ID1 path1 ID2 path2
+` + "```" + `
+
+It moves the drive file with ID given to the path (an rclone path which
+will be passed internally to rclone moveto).
+
+The path should end with a / to indicate move the file as named to
+this directory. If it doesn't end with a / then the last path
+component will be used as the file name.
+
+If the destination is a drive backend then server-side moving will be
+attempted if possible.
+
+Use the --interactive/-i or --dry-run flag to see what would be moved beforehand.`,
 }, {
 	Name:  "exportformats",
-	Short: "Dump the export formats for debug purposes",
+	Short: "Dump the export formats for debug purposes.",
 }, {
 	Name:  "importformats",
-	Short: "Dump the import formats for debug purposes",
+	Short: "Dump the import formats for debug purposes.",
 }, {
 	Name:  "query",
-	Short: "List files using Google Drive query language",
-	Long: `This command lists files based on a query
+	Short: "List files using Google Drive query language.",
+	Long: `This command lists files based on a query.
 
-Usage:
+Usage example:
 
-    rclone backend query drive: query
-    
+` + "```console" + `
+rclone backend query drive: query
+` + "```" + `
+
 The query syntax is documented at [Google Drive Search query terms and 
 operators](https://developers.google.com/drive/api/guides/ref-search-terms).
 
 For example:
 
-	rclone backend query drive: "'0ABc9DEFGHIJKLMNop0QRatUVW3X' in parents and name contains 'foo'"
+` + "```console" + `
+rclone backend query drive: "'0ABc9DEFGHIJKLMNop0QRatUVW3X' in parents and name contains 'foo'"
+` + "```" + `
 
 If the query contains literal ' or \ characters, these need to be escaped with
 \ characters. "'" becomes "\'" and "\" becomes "\\\", for example to match a 
 file named "foo ' \.txt":
 
-	rclone backend query drive: "name = 'foo \' \\\.txt'"
+` + "```console" + `
+rclone backend query drive: "name = 'foo \' \\\.txt'"
+` + "```" + `
 
 The result is a JSON array of matches, for example:
 
-    [
-	{
-		"createdTime": "2017-06-29T19:58:28.537Z",
-		"id": "0AxBe_CDEF4zkGHI4d0FjYko2QkD",
-		"md5Checksum": "68518d16be0c6fbfab918be61d658032",
-		"mimeType": "text/plain",
-		"modifiedTime": "2024-02-02T10:40:02.874Z",
-		"name": "foo ' \\.txt",
-		"parents": [
-			"0BxAe_BCDE4zkFGZpcWJGek0xbzC"
-		],
-		"resourceKey": "0-ABCDEFGHIXJQpIGqBJq3MC",
-		"sha1Checksum": "8f284fa768bfb4e45d076a579ab3905ab6bfa893",
-		"size": "311",
-		"webViewLink": "https://drive.google.com/file/d/0AxBe_CDEF4zkGHI4d0FjYko2QkD/view?usp=drivesdk\u0026resourcekey=0-ABCDEFGHIXJQpIGqBJq3MC"
-	}
-    ]`,
+` + "```json" + `
+[
+    {
+        "createdTime": "2017-06-29T19:58:28.537Z",
+        "id": "0AxBe_CDEF4zkGHI4d0FjYko2QkD",
+        "md5Checksum": "68518d16be0c6fbfab918be61d658032",
+        "mimeType": "text/plain",
+        "modifiedTime": "2024-02-02T10:40:02.874Z",
+        "name": "foo ' \\.txt",
+        "parents": [
+            "0BxAe_BCDE4zkFGZpcWJGek0xbzC"
+        ],
+        "resourceKey": "0-ABCDEFGHIXJQpIGqBJq3MC",
+        "sha1Checksum": "8f284fa768bfb4e45d076a579ab3905ab6bfa893",
+        "size": "311",
+        "webViewLink": "https://drive.google.com/file/d/0AxBe_CDEF4zkGHI4d0FjYko2QkD/view?usp=drivesdk\u0026resourcekey=0-ABCDEFGHIXJQpIGqBJq3MC"
+    }
+]
+` + "```console",
+}, {
+	Name:  "rescue",
+	Short: "Rescue or delete any orphaned files.",
+	Long: `This command rescues or deletes any orphaned files or directories.
+
+Sometimes files can get orphaned in Google Drive. This means that they
+are no longer in any folder in Google Drive.
+
+This command finds those files and either rescues them to a directory
+you specify or deletes them.
+
+This can be used in 3 ways.
+
+First, list all orphaned files:
+
+` + "```console" + `
+rclone backend rescue drive:
+` + "```" + `
+
+Second rescue all orphaned files to the directory indicated:
+
+` + "```console" + `
+rclone backend rescue drive: "relative/path/to/rescue/directory"
+` + "```" + `
+
+E.g. to rescue all orphans to a directory called "Orphans" in the top level:
+
+` + "```console" + `
+rclone backend rescue drive: Orphans
+` + "```" + `
+
+Third delete all orphaned files to the trash:
+
+` + "```console" + `
+rclone backend rescue drive: -o delete
+` + "```",
 }}
 
 // Command the backend to run a named command
@@ -3804,7 +3947,7 @@ The result is a JSON array of matches, for example:
 // The result should be capable of being JSON encoded
 // If it is a string or a []string it will be shown to the user
 // otherwise it will be JSON encoded and shown to the user like that
-func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out interface{}, err error) {
+func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out any, err error) {
 	switch name {
 	case "get":
 		out := make(map[string]string)
@@ -3893,16 +4036,16 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 			dir = arg[0]
 		}
 		return f.unTrashDir(ctx, dir, true)
-	case "copyid":
+	case "copyid", "moveid":
 		if len(arg)%2 != 0 {
 			return nil, errors.New("need an even number of arguments")
 		}
 		for len(arg) > 0 {
 			id, dest := arg[0], arg[1]
 			arg = arg[2:]
-			err = f.copyID(ctx, id, dest)
+			err = f.copyOrMoveID(ctx, name, id, dest)
 			if err != nil {
-				return nil, fmt.Errorf("failed copying %q to %q: %w", id, dest, err)
+				return nil, fmt.Errorf("failed %s %q to %q: %w", name, id, dest, err)
 			}
 		}
 		return nil, nil
@@ -3913,14 +4056,29 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 	case "query":
 		if len(arg) == 1 {
 			query := arg[0]
-			var results, err = f.query(ctx, query)
+			results, err := f.query(ctx, query)
 			if err != nil {
 				return nil, fmt.Errorf("failed to execute query: %q, error: %w", query, err)
 			}
 			return results, nil
-		} else {
-			return nil, errors.New("need a query argument")
 		}
+		return nil, errors.New("need a query argument")
+	case "rescue":
+		dirID := ""
+		_, delete := opt["delete"]
+		if len(arg) == 0 {
+			// no arguments - list only
+		} else if !delete && len(arg) == 1 {
+			dir := arg[0]
+			dirID, err = f.dirCache.FindDir(ctx, dir, true)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find or create rescue directory %q: %w", dir, err)
+			}
+			fs.Infof(f, "Rescuing orphans into %q", dir)
+		} else {
+			return nil, errors.New("syntax error: need 0 or 1 args or -o delete")
+		}
+		return nil, f.rescue(ctx, dirID, delete)
 	default:
 		return nil, fs.ErrorCommandNotFound
 	}
@@ -3964,6 +4122,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	}
 	return "", hash.ErrUnsupported
 }
+
 func (o *baseObject) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if t != hash.MD5 && t != hash.SHA1 && t != hash.SHA256 {
 		return "", hash.ErrUnsupported
@@ -3978,7 +4137,8 @@ func (o *baseObject) Size() int64 {
 
 // getRemoteInfoWithExport returns a drive.File and the export settings for the remote
 func (f *Fs) getRemoteInfoWithExport(ctx context.Context, remote string) (
-	info *drive.File, extension, exportName, exportMimeType string, isDocument bool, err error) {
+	info *drive.File, extension, exportName, exportMimeType string, isDocument bool, err error,
+) {
 	leaf, directoryID, err := f.dirCache.FindPath(ctx, remote, false)
 	if err != nil {
 		if err == fs.ErrorDirNotFound {
@@ -4191,12 +4351,13 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	}
 	return o.baseObject.open(ctx, o.url, options...)
 }
+
 func (o *documentObject) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	// Update the size with what we are reading as it can change from
 	// the HEAD in the listing to this GET. This stops rclone marking
 	// the transfer as corrupted.
 	var offset, end int64 = 0, -1
-	var newOptions = options[:0]
+	newOptions := options[:0]
 	for _, o := range options {
 		// Note that Range requests don't work on Google docs:
 		// https://developers.google.com/drive/v3/web/manage-downloads#partial_download
@@ -4223,9 +4384,10 @@ func (o *documentObject) Open(ctx context.Context, options ...fs.OpenOption) (in
 	}
 	return
 }
+
 func (o *linkObject) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	var offset, limit int64 = 0, -1
-	var data = o.content
+	data := o.content
 	for _, option := range options {
 		switch x := option.(type) {
 		case *fs.SeekOption:
@@ -4250,7 +4412,8 @@ func (o *linkObject) Open(ctx context.Context, options ...fs.OpenOption) (in io.
 }
 
 func (o *baseObject) update(ctx context.Context, updateInfo *drive.File, uploadMimeType string, in io.Reader,
-	src fs.ObjectInfo) (info *drive.File, err error) {
+	src fs.ObjectInfo,
+) (info *drive.File, err error) {
 	// Make the API request to upload metadata and file data.
 	size := src.Size()
 	if size >= 0 && size < int64(o.fs.opt.UploadCutoff) {
@@ -4328,6 +4491,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 	return nil
 }
+
 func (o *documentObject) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	srcMimeType := fs.MimeType(ctx, src)
 	importMimeType := ""
@@ -4423,6 +4587,7 @@ func (o *baseObject) Metadata(ctx context.Context) (metadata fs.Metadata, err er
 func (o *documentObject) ext() string {
 	return o.baseObject.remote[len(o.baseObject.remote)-o.extLen:]
 }
+
 func (o *linkObject) ext() string {
 	return o.baseObject.remote[len(o.baseObject.remote)-o.extLen:]
 }
@@ -4506,6 +4671,7 @@ var (
 	_ fs.PutUncheckeder  = (*Fs)(nil)
 	_ fs.PublicLinker    = (*Fs)(nil)
 	_ fs.ListRer         = (*Fs)(nil)
+	_ fs.ListPer         = (*Fs)(nil)
 	_ fs.MergeDirser     = (*Fs)(nil)
 	_ fs.DirSetModTimer  = (*Fs)(nil)
 	_ fs.MkdirMetadataer = (*Fs)(nil)

@@ -39,6 +39,7 @@ import (
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/random"
 	"github.com/rclone/rclone/lib/readers"
+	"github.com/rclone/rclone/lib/transform"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/unicode/norm"
 )
@@ -101,11 +102,11 @@ func checkHashes(ctx context.Context, src fs.ObjectInfo, dst fs.Object, ht hash.
 		return true, hash.None, srcHash, dstHash, nil
 	}
 	if srcErr != nil {
-		err = fs.CountError(srcErr)
+		err = fs.CountError(ctx, srcErr)
 		fs.Errorf(src, "Failed to calculate src hash: %v", err)
 	}
 	if dstErr != nil {
-		err = fs.CountError(dstErr)
+		err = fs.CountError(ctx, dstErr)
 		fs.Errorf(dst, "Failed to calculate dst hash: %v", err)
 	}
 	if err != nil {
@@ -114,10 +115,10 @@ func checkHashes(ctx context.Context, src fs.ObjectInfo, dst fs.Object, ht hash.
 	if srcHash != dstHash {
 		fs.Debugf(src, "%v = %s (%v)", ht, srcHash, src.Fs())
 		fs.Debugf(dst, "%v = %s (%v)", ht, dstHash, dst.Fs())
-	} else {
-		fs.Debugf(src, "%v = %s OK", ht, srcHash)
+		return false, ht, srcHash, dstHash, nil
 	}
-	return srcHash == dstHash, ht, srcHash, dstHash, nil
+	fs.Debugf(src, "%v = %s OK", ht, srcHash)
+	return true, ht, srcHash, dstHash, nil
 }
 
 // Equal checks to see if the src and dst objects are equal by looking at
@@ -183,7 +184,13 @@ func sizeDiffers(ctx context.Context, src, dst fs.ObjectInfo) bool {
 	if ci.IgnoreSize || src.Size() < 0 || dst.Size() < 0 {
 		return false
 	}
-	return src.Size() != dst.Size()
+	if src.Size() == dst.Size() {
+		fs.Debugf(dst, "size = %d OK", dst.Size())
+		return false
+	}
+	fs.Debugf(src, "size = %d (%v)", src.Size(), src.Fs())
+	fs.Debugf(dst, "size = %d (%v)", dst.Size(), dst.Fs())
+	return true
 }
 
 var checksumWarning sync.Once
@@ -240,7 +247,7 @@ func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) 
 	ci := fs.GetConfig(ctx)
 	logger, _ := GetLogger(ctx)
 	if sizeDiffers(ctx, src, dst) {
-		fs.Debugf(src, "Sizes differ (src %d vs dst %d)", src.Size(), dst.Size())
+		fs.Debug(src, "Sizes differ")
 		logger(ctx, Differ, src, dst, nil)
 		return false
 	}
@@ -340,7 +347,7 @@ func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) 
 				logger(ctx, Differ, src, dst, nil)
 				return false
 			} else if err != nil {
-				err = fs.CountError(err)
+				err = fs.CountError(ctx, err)
 				fs.Errorf(dst, "Failed to set modification time: %v", err)
 			} else {
 				fs.Infof(src, "Updated modification time in destination")
@@ -424,7 +431,13 @@ func MoveTransfer(ctx context.Context, fdst fs.Fs, dst fs.Object, remote string,
 
 // move - see Move for help
 func move(ctx context.Context, fdst fs.Fs, dst fs.Object, remote string, src fs.Object, isTransfer bool) (newDst fs.Object, err error) {
+	origRemote := remote // avoid double-transform on fallback to copy
+	remote = transform.Path(ctx, remote, false)
 	ci := fs.GetConfig(ctx)
+	newDst = dst
+	if ci.DryRun && dst != nil && SameObject(src, dst) && src.Remote() == transform.Path(ctx, dst.Remote(), false) {
+		return // avoid SkipDestructive log for objects that won't really be moved
+	}
 	var tr *accounting.Transfer
 	if isTransfer {
 		tr = accounting.Stats(ctx).NewTransfer(src, fdst)
@@ -437,8 +450,11 @@ func move(ctx context.Context, fdst fs.Fs, dst fs.Object, remote string, src fs.
 		}
 		tr.Done(ctx, err)
 	}()
-	newDst = dst
-	if SkipDestructive(ctx, src, "move") {
+	action := "move"
+	if remote != src.Remote() {
+		action += " to " + remote
+	}
+	if SkipDestructive(ctx, src, action) {
 		in := tr.Account(ctx, nil)
 		in.DryRun(src.Size())
 		return newDst, nil
@@ -447,12 +463,14 @@ func move(ctx context.Context, fdst fs.Fs, dst fs.Object, remote string, src fs.
 	if doMove := fdst.Features().Move; doMove != nil && (SameConfig(src.Fs(), fdst) || (SameRemoteType(src.Fs(), fdst) && (fdst.Features().ServerSideAcrossConfigs || ci.ServerSideAcrossConfigs))) {
 		// Delete destination if it exists and is not the same file as src (could be same file while seemingly different if the remote is case insensitive)
 		if dst != nil {
-			remote = dst.Remote()
+			remote = transform.Path(ctx, dst.Remote(), false)
 			if !SameObject(src, dst) {
 				err = DeleteFile(ctx, dst)
 				if err != nil {
 					return newDst, err
 				}
+			} else if src.Remote() == remote {
+				return newDst, nil
 			} else if needsMoveCaseInsensitive(fdst, fdst, remote, src.Remote(), false) {
 				doMove = func(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
 					return MoveCaseInsensitive(ctx, fdst, fdst, remote, src.Remote(), false, src)
@@ -481,14 +499,17 @@ func move(ctx context.Context, fdst fs.Fs, dst fs.Object, remote string, src fs.
 			fs.Debugf(src, "Can't move, switching to copy")
 			_ = in.Close()
 		default:
-			err = fs.CountError(err)
+			err = fs.CountError(ctx, err)
 			fs.Errorf(src, "Couldn't move: %v", err)
 			_ = in.Close()
 			return newDst, err
 		}
 	}
 	// Move not found or didn't work so copy dst <- src
-	newDst, err = Copy(ctx, fdst, dst, remote, src)
+	if origRemote != remote {
+		dst = nil
+	}
+	newDst, err = Copy(ctx, fdst, dst, origRemote, src)
 	if err != nil {
 		fs.Errorf(src, "Not deleting source as copy failed: %v", err)
 		return newDst, err
@@ -516,24 +537,7 @@ func SuffixName(ctx context.Context, remote string) string {
 		return remote
 	}
 	if ci.SuffixKeepExtension {
-		var (
-			base  = remote
-			exts  = ""
-			first = true
-			ext   = path.Ext(remote)
-		)
-		for ext != "" {
-			// Look second and subsequent extensions in mime types.
-			// If they aren't found then don't keep it as an extension.
-			if !first && mime.TypeByExtension(ext) == "" {
-				break
-			}
-			base = base[:len(base)-len(ext)]
-			exts = ext + exts
-			first = false
-			ext = path.Ext(base)
-		}
-		return base + ci.Suffix + exts
+		return transform.SuffixKeepExtension(remote, ci.Suffix)
 	}
 	return remote + ci.Suffix
 }
@@ -566,7 +570,7 @@ func DeleteFileWithBackupDir(ctx context.Context, dst fs.Object, backupDir fs.Fs
 	}
 	if err != nil {
 		fs.Errorf(dst, "Couldn't %s: %v", action, err)
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 	} else if !skip {
 		fs.Infof(dst, "%s", actioned)
 	}
@@ -593,7 +597,7 @@ func DeleteFilesWithBackupDir(ctx context.Context, toBeDeleted fs.ObjectsChan, b
 	var errorCount atomic.Int32
 	var fatalErrorCount atomic.Int32
 
-	for i := 0; i < ci.Checkers; i++ {
+	for range ci.Checkers {
 		go func() {
 			defer wg.Done()
 			for dst := range toBeDeleted {
@@ -732,7 +736,7 @@ func SameDir(fdst, fsrc fs.Info) bool {
 }
 
 // Retry runs fn up to maxTries times if it returns a retriable error
-func Retry(ctx context.Context, o interface{}, maxTries int, fn func() error) (err error) {
+func Retry(ctx context.Context, o any, maxTries int, fn func() error) (err error) {
 	for tries := 1; tries <= maxTries; tries++ {
 		// Call the function which might error
 		err = fn()
@@ -777,7 +781,7 @@ var StdoutMutex sync.Mutex
 // This writes to stdout holding the StdoutMutex. If you are going to
 // override it and write to os.Stdout then you should hold the
 // StdoutMutex too.
-var SyncPrintf = func(format string, a ...interface{}) {
+var SyncPrintf = func(format string, a ...any) {
 	StdoutMutex.Lock()
 	defer StdoutMutex.Unlock()
 	fmt.Printf(format, a...)
@@ -788,7 +792,7 @@ var SyncPrintf = func(format string, a ...interface{}) {
 // Ignores errors from Fprintf.
 //
 // Prints to stdout if w is nil
-func SyncFprintf(w io.Writer, format string, a ...interface{}) {
+func SyncFprintf(w io.Writer, format string, a ...any) {
 	if w == nil || w == os.Stdout {
 		SyncPrintf(format, a...)
 	} else {
@@ -974,7 +978,7 @@ func HashLister(ctx context.Context, ht hash.Type, outputBase64 bool, downloadFl
 			}()
 			sum, err := HashSum(ctx, ht, outputBase64, downloadFlag, o)
 			if err != nil {
-				fs.Errorf(o, "%v", fs.CountError(err))
+				fs.Errorf(o, "%v", fs.CountError(ctx, err))
 				return
 			}
 			SyncFprintf(w, "%*s  %s\n", width, sum, o.Remote())
@@ -1050,10 +1054,10 @@ func Mkdir(ctx context.Context, f fs.Fs, dir string) error {
 	if SkipDestructive(ctx, fs.LogDirName(f, dir), "make directory") {
 		return nil
 	}
-	fs.Debugf(fs.LogDirName(f, dir), "Making directory")
+	fs.Infof(fs.LogDirName(f, dir), "Making directory")
 	err := f.Mkdir(ctx, dir)
 	if err != nil {
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 		return err
 	}
 	return nil
@@ -1075,7 +1079,7 @@ func MkdirMetadata(ctx context.Context, f fs.Fs, dir string, metadata fs.Metadat
 	fs.Debugf(fs.LogDirName(f, dir), "Making directory with metadata")
 	newDst, err = do(ctx, dir, metadata)
 	if err != nil {
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 		return nil, err
 	}
 	if mtime, ok := metadata["mtime"]; ok {
@@ -1133,7 +1137,7 @@ func TryRmdir(ctx context.Context, f fs.Fs, dir string) error {
 func Rmdir(ctx context.Context, f fs.Fs, dir string) error {
 	err := TryRmdir(ctx, f, dir)
 	if err != nil {
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 		return err
 	}
 	return err
@@ -1162,7 +1166,7 @@ func Purge(ctx context.Context, f fs.Fs, dir string) (err error) {
 		err = Rmdirs(ctx, f, dir, false)
 	}
 	if err != nil {
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 		return err
 	}
 	return nil
@@ -1188,6 +1192,57 @@ func Delete(ctx context.Context, f fs.Fs) error {
 	return err
 }
 
+// RemoveExisting removes an existing file in a safe way so that it
+// can be restored if the operation fails.
+//
+// This first detects if there is an existing file and renames it to a
+// temporary name if there is.
+//
+// The returned cleanup function should be called on a defer statement
+// with a pointer to the error returned. It will revert the changes if
+// there is an error or delete the existing file if not.
+func RemoveExisting(ctx context.Context, f fs.Fs, remote string, operation string) (cleanup func(*error), err error) {
+	existingObj, err := f.NewObject(ctx, remote)
+	if err != nil {
+		return func(*error) {}, nil
+	}
+	doMove := f.Features().Move
+	if doMove == nil {
+		return nil, fmt.Errorf("%s: destination file exists already and can't rename", operation)
+	}
+
+	// Avoid making the leaf name longer if it's already lengthy to avoid
+	// trouble with file name length limits.
+	suffix := "." + random.String(8)
+	var remoteSaved string
+	if len(path.Base(remote)) > 100 {
+		remoteSaved = TruncateString(remote, len(remote)-len(suffix)) + suffix
+	} else {
+		remoteSaved = remote + suffix
+	}
+
+	fs.Debugf(existingObj, "%s: renaming existing object to %q before starting", operation, remoteSaved)
+	existingObj, err = doMove(ctx, existingObj, remoteSaved)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to rename existing file: %w", operation, err)
+	}
+	return func(perr *error) {
+		if *perr == nil {
+			fs.Debugf(existingObj, "%s: removing renamed existing file after operation", operation)
+			err := existingObj.Remove(ctx)
+			if err != nil {
+				*perr = fmt.Errorf("%s: failed to remove renamed existing file: %w", operation, err)
+			}
+		} else {
+			fs.Debugf(existingObj, "%s: renaming existing back after failed operation", operation)
+			_, renameErr := doMove(ctx, existingObj, remote)
+			if renameErr != nil {
+				fs.Errorf(existingObj, "%s: failed to restore existing file after failed operation: %v", operation, renameErr)
+			}
+		}
+	}, nil
+}
+
 // listToChan will transfer all objects in the listing to the output
 //
 // If an error occurs, the error will be logged, and it will close the
@@ -1207,7 +1262,7 @@ func listToChan(ctx context.Context, f fs.Fs, dir string) fs.ObjectsChan {
 		})
 		if err != nil && err != fs.ErrorDirNotFound {
 			err = fmt.Errorf("failed to list: %w", err)
-			err = fs.CountError(err)
+			err = fs.CountError(ctx, err)
 			fs.Errorf(nil, "%v", err)
 		}
 	}()
@@ -1267,7 +1322,7 @@ func Cat(ctx context.Context, f fs.Fs, w io.Writer, offset, count int64, sep []b
 		var in io.ReadCloser
 		in, err = Open(ctx, o, options...)
 		if err != nil {
-			err = fs.CountError(err)
+			err = fs.CountError(ctx, err)
 			fs.Errorf(o, "Failed to open: %v", err)
 			return
 		}
@@ -1280,13 +1335,13 @@ func Cat(ctx context.Context, f fs.Fs, w io.Writer, offset, count int64, sep []b
 		defer mu.Unlock()
 		_, err = io.Copy(w, in)
 		if err != nil {
-			err = fs.CountError(err)
+			err = fs.CountError(ctx, err)
 			fs.Errorf(o, "Failed to send to output: %v", err)
 		}
 		if len(sep) > 0 {
 			_, err = w.Write(sep)
 			if err != nil {
-				err = fs.CountError(err)
+				err = fs.CountError(ctx, err)
 				fs.Errorf(o, "Failed to send separator to output: %v", err)
 			}
 		}
@@ -1423,7 +1478,7 @@ func rcatSrc(ctx context.Context, fdst fs.Fs, dstFileName string, in io.ReadClos
 	src := object.NewStaticObjectInfo(dstFileName, modTime, int64(readCounter.BytesRead()), false, sums, fdst).WithMetadata(meta)
 	if !equal(ctx, src, dst, opt) {
 		err = fmt.Errorf("corrupted on transfer")
-		err = fs.CountError(err)
+		err = fs.CountError(ctx, err)
 		fs.Errorf(dst, "%v", err)
 		return dst, err
 	}
@@ -1450,7 +1505,7 @@ func Rmdirs(ctx context.Context, f fs.Fs, dir string, leaveRoot bool) error {
 	dirEmpty[dir] = !leaveRoot
 	err := walk.Walk(ctx, f, dir, false, ci.MaxDepth, func(dirPath string, entries fs.DirEntries, err error) error {
 		if err != nil {
-			err = fs.CountError(err)
+			err = fs.CountError(ctx, err)
 			fs.Errorf(f, "Failed to list %q: %v", dirPath, err)
 			return nil
 		}
@@ -1526,7 +1581,7 @@ func Rmdirs(ctx context.Context, f fs.Fs, dir string, leaveRoot bool) error {
 			g.Go(func() error {
 				err := TryRmdir(gCtx, f, dir)
 				if err != nil {
-					err = fs.CountError(err)
+					err = fs.CountError(ctx, err)
 					fs.Errorf(dir, "Failed to rmdir: %v", err)
 					errCount.Add(err)
 				}
@@ -1897,6 +1952,9 @@ func MoveBackupDir(ctx context.Context, backupDir fs.Fs, dst fs.Object) (err err
 func needsMoveCaseInsensitive(fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName string, cp bool) bool {
 	dstFilePath := path.Join(fdst.Root(), dstFileName)
 	srcFilePath := path.Join(fsrc.Root(), srcFileName)
+	if !cp && fdst.Name() == fsrc.Name() && dstFileName != srcFileName && norm.NFC.String(dstFilePath) == norm.NFC.String(srcFilePath) {
+		return true
+	}
 	return !cp && fdst.Name() == fsrc.Name() && fdst.Features().CaseInsensitive && dstFileName != srcFileName && strings.EqualFold(dstFilePath, srcFilePath)
 }
 
@@ -1943,12 +2001,12 @@ func MoveCaseInsensitive(ctx context.Context, fdst fs.Fs, fsrc fs.Fs, dstFileNam
 }
 
 // moveOrCopyFile moves or copies a single file possibly to a new name
-func moveOrCopyFile(ctx context.Context, fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName string, cp bool) (err error) {
+func moveOrCopyFile(ctx context.Context, fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName string, cp bool, allowOverlap bool) (err error) {
 	ci := fs.GetConfig(ctx)
 	logger, usingLogger := GetLogger(ctx)
 	dstFilePath := path.Join(fdst.Root(), dstFileName)
 	srcFilePath := path.Join(fsrc.Root(), srcFileName)
-	if fdst.Name() == fsrc.Name() && dstFilePath == srcFilePath {
+	if fdst.Name() == fsrc.Name() && dstFilePath == srcFilePath && !allowOverlap {
 		fs.Debugf(fdst, "don't need to copy/move %s, it is already at target location", dstFileName)
 		if usingLogger {
 			srcObj, _ := fsrc.NewObject(ctx, srcFileName)
@@ -2055,7 +2113,14 @@ func moveOrCopyFile(ctx context.Context, fdst fs.Fs, fsrc fs.Fs, dstFileName str
 //
 // This is treated as a transfer.
 func MoveFile(ctx context.Context, fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName string) (err error) {
-	return moveOrCopyFile(ctx, fdst, fsrc, dstFileName, srcFileName, false)
+	return moveOrCopyFile(ctx, fdst, fsrc, dstFileName, srcFileName, false, false)
+}
+
+// TransformFile transforms a file in place using --name-transform
+//
+// This is treated as a transfer.
+func TransformFile(ctx context.Context, fdst fs.Fs, srcFileName string) (err error) {
+	return moveOrCopyFile(ctx, fdst, fdst, srcFileName, srcFileName, false, true)
 }
 
 // SetTier changes tier of object in remote
@@ -2089,20 +2154,28 @@ func SetTierFile(ctx context.Context, o fs.Object, tier string) error {
 
 // TouchDir touches every file in directory with time t
 func TouchDir(ctx context.Context, f fs.Fs, remote string, t time.Time, recursive bool) error {
-	return walk.ListR(ctx, f, remote, false, ConfigMaxDepth(ctx, recursive), walk.ListObjects, func(entries fs.DirEntries) error {
+	ci := fs.GetConfig(ctx)
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(ci.Transfers)
+	err := walk.ListR(ctx, f, remote, false, ConfigMaxDepth(ctx, recursive), walk.ListObjects, func(entries fs.DirEntries) error {
 		entries.ForObject(func(o fs.Object) {
 			if !SkipDestructive(ctx, o, "touch") {
-				fs.Debugf(f, "Touching %q", o.Remote())
-				err := o.SetModTime(ctx, t)
-				if err != nil {
-					err = fmt.Errorf("failed to touch: %w", err)
-					err = fs.CountError(err)
-					fs.Errorf(o, "%v", err)
-				}
+				g.Go(func() error {
+					fs.Debugf(f, "Touching %q", o.Remote())
+					err := o.SetModTime(gCtx, t)
+					if err != nil {
+						err = fmt.Errorf("failed to touch: %w", err)
+						err = fs.CountError(gCtx, err)
+						fs.Errorf(o, "%v", err)
+					}
+					return nil
+				})
 			}
 		})
 		return nil
 	})
+	_ = g.Wait()
+	return err
 }
 
 // ListFormat defines files information print format
@@ -2154,52 +2227,23 @@ func (l *ListFormat) SetOutput(output []func(entry *ListJSONItem) string) {
 func (l *ListFormat) AddModTime(timeFormat string) {
 	switch timeFormat {
 	case "":
-		timeFormat = "2006-01-02 15:04:05"
-	case "Layout":
-		timeFormat = time.Layout
-	case "ANSIC":
-		timeFormat = time.ANSIC
-	case "UnixDate":
-		timeFormat = time.UnixDate
-	case "RubyDate":
-		timeFormat = time.RubyDate
-	case "RFC822":
-		timeFormat = time.RFC822
-	case "RFC822Z":
-		timeFormat = time.RFC822Z
-	case "RFC850":
-		timeFormat = time.RFC850
-	case "RFC1123":
-		timeFormat = time.RFC1123
-	case "RFC1123Z":
-		timeFormat = time.RFC1123Z
-	case "RFC3339":
-		timeFormat = time.RFC3339
-	case "RFC3339Nano":
-		timeFormat = time.RFC3339Nano
-	case "Kitchen":
-		timeFormat = time.Kitchen
-	case "Stamp":
-		timeFormat = time.Stamp
-	case "StampMilli":
-		timeFormat = time.StampMilli
-	case "StampMicro":
-		timeFormat = time.StampMicro
-	case "StampNano":
-		timeFormat = time.StampNano
-	case "DateTime":
-		// timeFormat = time.DateTime // missing in go1.19
-		timeFormat = "2006-01-02 15:04:05"
-	case "DateOnly":
-		// timeFormat = time.DateOnly // missing in go1.19
-		timeFormat = "2006-01-02"
-	case "TimeOnly":
-		// timeFormat = time.TimeOnly // missing in go1.19
-		timeFormat = "15:04:05"
+		l.AppendOutput(func(entry *ListJSONItem) string {
+			return entry.ModTime.When.Local().Format("2006-01-02 15:04:05")
+		})
+	case "unix":
+		l.AppendOutput(func(entry *ListJSONItem) string {
+			return fmt.Sprint(entry.ModTime.When.Unix())
+		})
+	case "unixnano":
+		l.AppendOutput(func(entry *ListJSONItem) string {
+			return fmt.Sprint(entry.ModTime.When.UnixNano())
+		})
+	default:
+		timeFormat = transform.TimeFormat(timeFormat)
+		l.AppendOutput(func(entry *ListJSONItem) string {
+			return entry.ModTime.When.Local().Format(timeFormat)
+		})
 	}
-	l.AppendOutput(func(entry *ListJSONItem) string {
-		return entry.ModTime.When.Local().Format(timeFormat)
-	})
 }
 
 // AddSize adds file's size to output
@@ -2384,7 +2428,7 @@ func DirMove(ctx context.Context, f fs.Fs, srcRemote, dstRemote string) (err err
 	}
 	renames := make(chan rename, ci.Checkers)
 	g, gCtx := errgroup.WithContext(context.Background())
-	for i := 0; i < ci.Checkers; i++ {
+	for range ci.Checkers {
 		g.Go(func() error {
 			for job := range renames {
 				dstOverwritten, _ := f.NewObject(gCtx, job.newPath)
@@ -2492,7 +2536,7 @@ var (
 // skipDestructiveChoose asks the user which action to take
 //
 // Call with interactiveMu held
-func skipDestructiveChoose(ctx context.Context, subject interface{}, action string) (skip bool) {
+func skipDestructiveChoose(ctx context.Context, subject any, action string) (skip bool) {
 	// Lock the StdoutMutex - must not call fs.Log anything
 	// otherwise it will deadlock with --interactive --progress
 	StdoutMutex.Lock()
@@ -2542,7 +2586,7 @@ func skipDestructiveChoose(ctx context.Context, subject interface{}, action stri
 //
 // Together they should make sense in this sentence: "Rclone is about
 // to action subject".
-func SkipDestructive(ctx context.Context, subject interface{}, action string) (skip bool) {
+func SkipDestructive(ctx context.Context, subject any, action string) (skip bool) {
 	var flag string
 	ci := fs.GetConfig(ctx)
 	switch {

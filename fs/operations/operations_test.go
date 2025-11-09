@@ -1279,6 +1279,14 @@ func TestListFormat(t *testing.T) {
 	assert.Equal(t, t1.Local().Format("2006-01-02 15:04:05"), list.Format(item0))
 
 	list.SetOutput(nil)
+	list.AddModTime("unix")
+	assert.Equal(t, fmt.Sprint(t1.Local().Unix()), list.Format(item0))
+
+	list.SetOutput(nil)
+	list.AddModTime("unixnano")
+	assert.Equal(t, fmt.Sprint(t1.Local().UnixNano()), list.Format(item0))
+
+	list.SetOutput(nil)
 	list.SetSeparator("|")
 	list.AddID()
 	list.AddOrigID()
@@ -1516,7 +1524,7 @@ func TestRcat(t *testing.T) {
 		r.CheckRemoteItems(t, file1, file2)
 	}
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		withChecksum := (i & 1) != 0
 		ignoreChecksum := (i & 2) != 0
 		t.Run(fmt.Sprintf("withChecksum=%v,ignoreChecksum=%v", withChecksum, ignoreChecksum), func(t *testing.T) {
@@ -1883,4 +1891,77 @@ func TestDirsEqual(t *testing.T) {
 	opt.SetDirMetadata, opt.SetDirModtime = false, false
 	equal = operations.DirsEqual(ctx, src, dst, opt)
 	assert.True(t, equal)
+}
+
+func TestRemoveExisting(t *testing.T) {
+	ctx := context.Background()
+	r := fstest.NewRun(t)
+	if r.Fremote.Features().Move == nil {
+		t.Skip("Skipping as remote can't Move")
+	}
+
+	file1 := r.WriteObject(ctx, "sub dir/test remove existing", "hello world", t1)
+	file2 := r.WriteObject(ctx, "sub dir/test remove existing with long name 123456789012345678901234567890123456789012345678901234567890123456789", "hello long name world", t1)
+
+	r.CheckRemoteItems(t, file1, file2)
+
+	var returnedError error
+
+	// Check not found first
+	cleanup, err := operations.RemoveExisting(ctx, r.Fremote, "not found", "TEST")
+	assert.Equal(t, err, nil)
+	r.CheckRemoteItems(t, file1, file2)
+	cleanup(&returnedError)
+	r.CheckRemoteItems(t, file1, file2)
+
+	// Remove file1
+	cleanup, err = operations.RemoveExisting(ctx, r.Fremote, file1.Path, "TEST")
+	assert.Equal(t, err, nil)
+	//r.CheckRemoteItems(t, file1, file2)
+
+	// Check file1 with temporary name exists
+	var buf bytes.Buffer
+	err = operations.List(ctx, r.Fremote, &buf)
+	require.NoError(t, err)
+	res := buf.String()
+	assert.NotContains(t, res, "       11 "+file1.Path+"\n")
+	assert.Contains(t, res, "       11 "+file1.Path+".")
+	assert.Contains(t, res, "       21 "+file2.Path+"\n")
+
+	cleanup(&returnedError)
+	r.CheckRemoteItems(t, file2)
+
+	// Remove file2 with an error
+	cleanup, err = operations.RemoveExisting(ctx, r.Fremote, file2.Path, "TEST")
+	assert.Equal(t, err, nil)
+
+	// Check file2 with truncated temporary name exists
+	buf.Reset()
+	err = operations.List(ctx, r.Fremote, &buf)
+	require.NoError(t, err)
+	res = buf.String()
+	assert.NotContains(t, res, "       21 "+file2.Path+"\n")
+	assert.NotContains(t, res, "       21 "+file2.Path+".")
+	assert.Contains(t, res, "       21 "+file2.Path[:100])
+
+	returnedError = errors.New("BOOM")
+	cleanup(&returnedError)
+	r.CheckRemoteItems(t, file2)
+
+	// Remove file2
+	cleanup, err = operations.RemoveExisting(ctx, r.Fremote, file2.Path, "TEST")
+	assert.Equal(t, err, nil)
+
+	// Check file2 with truncated temporary name exists
+	buf.Reset()
+	err = operations.List(ctx, r.Fremote, &buf)
+	require.NoError(t, err)
+	res = buf.String()
+	assert.NotContains(t, res, "       21 "+file2.Path+"\n")
+	assert.NotContains(t, res, "       21 "+file2.Path+".")
+	assert.Contains(t, res, "       21 "+file2.Path[:100])
+
+	returnedError = nil
+	cleanup(&returnedError)
+	r.CheckRemoteItems(t)
 }

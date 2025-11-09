@@ -57,14 +57,19 @@ type Run struct {
 	Precision    time.Duration
 	cleanRemote  func()
 	mkdir        map[string]bool // whether the remote has been made yet for the fs name
-	Logf, Fatalf func(text string, args ...interface{})
+	Logf, Fatalf func(text string, args ...any)
+}
+
+// ResetRun re-reads the command line arguments into the global run.
+func ResetRun() {
+	oneRun = newRun()
 }
 
 // TestMain drives the tests
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if !*Individual {
-		oneRun = newRun()
+		ResetRun()
 	}
 	rc := m.Run()
 	if !*Individual {

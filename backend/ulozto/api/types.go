@@ -82,8 +82,8 @@ type File struct {
 	ContentType              string `json:"content_type"`
 	Format                   struct {
 	} `json:"format"`
-	DownloadTypes []interface{} `json:"download_types"`
-	ThumbnailInfo []interface{} `json:"thumbnail_info"`
+	DownloadTypes []any `json:"download_types"`
+	ThumbnailInfo []any `json:"thumbnail_info"`
 	PreviewInfo   struct {
 	} `json:"preview_info"`
 	Privacy          string    `json:"privacy"`
@@ -102,6 +102,19 @@ type File struct {
 		ArchiveContent bool `json:"archive_content"`
 		Preview        bool `json:"preview"`
 	} `json:"processing"`
+}
+
+// FolderSize represents the API object describing the sizes of a files and subfolders of a folder.
+type FolderSize struct {
+	FilesSize    int64 `json:"files_size"`
+	FilesCount   int64 `json:"files_count"`
+	FoldersCount int64 `json:"folders_count"`
+}
+
+// FolderSizes describes the subfolder sizes of a single folder.
+type FolderSizes struct {
+	Direct    FolderSize `json:"direct"`
+	Recursive FolderSize `json:"recursive"`
 }
 
 // CreateFolderRequest represents the JSON API object
@@ -125,6 +138,9 @@ type ListFilesResponse struct {
 	Metadata ListResponseMetadata `json:"metadata"`
 	Items    []File               `json:"items"`
 }
+
+// FolderSizesResponse represents the response from the folder-sizes endpoint.
+type FolderSizesResponse map[string]FolderSizes
 
 // DeleteFoldersRequest represents the JSON API object
 // that's sent to the delete folders API endpoint.

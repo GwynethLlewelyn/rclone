@@ -1,10 +1,8 @@
 //go:build !plan9
-// +build !plan9
 
 package logger_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -17,9 +15,9 @@ func TestMain(m *testing.M) {
 	// This enables the testscript package. See:
 	// https://bitfieldconsulting.com/golang/cli-testing
 	// https://pkg.go.dev/github.com/rogpeppe/go-internal@v1.11.0/testscript
-	os.Exit(testscript.RunMain(m, map[string]func() int{
+	testscript.Main(m, map[string]func(){
 		"rclone": logger.Main,
-	}))
+	})
 }
 
 func TestLogger(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,8 +37,8 @@ import (
 	"github.com/aws/smithy-go/logging"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-
 	"github.com/ncw/swift/v2"
+
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/chunksize"
@@ -47,8 +48,8 @@ import (
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/fs/list"
 	"github.com/rclone/rclone/fs/operations"
-	"github.com/rclone/rclone/fs/walk"
 	"github.com/rclone/rclone/lib/atexit"
 	"github.com/rclone/rclone/lib/bucket"
 	"github.com/rclone/rclone/lib/encoder"
@@ -62,138 +63,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// The S3 providers
-//
-// Please keep these in alphabetical order, but with AWS first and
-// Other last.
-//
-// NB if you add a new provider here, then add it in the setQuirks
-// function and set the correct quirks. Test the quirks are correct by
-// running the integration tests "go test -v -remote NewS3Provider:".
-//
-// See https://github.com/rclone/rclone/blob/master/CONTRIBUTING.md#adding-a-new-s3-provider
-// for full information about how to add a new s3 provider.
-var providerOption = fs.Option{
-	Name: fs.ConfigProvider,
-	Help: "Choose your S3 provider.",
-	Examples: []fs.OptionExample{{
-		Value: "AWS",
-		Help:  "Amazon Web Services (AWS) S3",
-	}, {
-		Value: "Alibaba",
-		Help:  "Alibaba Cloud Object Storage System (OSS) formerly Aliyun",
-	}, {
-		Value: "ArvanCloud",
-		Help:  "Arvan Cloud Object Storage (AOS)",
-	}, {
-		Value: "Ceph",
-		Help:  "Ceph Object Storage",
-	}, {
-		Value: "ChinaMobile",
-		Help:  "China Mobile Ecloud Elastic Object Storage (EOS)",
-	}, {
-		Value: "Cloudflare",
-		Help:  "Cloudflare R2 Storage",
-	}, {
-		Value: "DigitalOcean",
-		Help:  "DigitalOcean Spaces",
-	}, {
-		Value: "Dreamhost",
-		Help:  "Dreamhost DreamObjects",
-	}, {
-		Value: "GCS",
-		Help:  "Google Cloud Storage",
-	}, {
-		Value: "HuaweiOBS",
-		Help:  "Huawei Object Storage Service",
-	}, {
-		Value: "IBMCOS",
-		Help:  "IBM COS S3",
-	}, {
-		Value: "IDrive",
-		Help:  "IDrive e2",
-	}, {
-		Value: "IONOS",
-		Help:  "IONOS Cloud",
-	}, {
-		Value: "LyveCloud",
-		Help:  "Seagate Lyve Cloud",
-	}, {
-		Value: "Leviia",
-		Help:  "Leviia Object Storage",
-	}, {
-		Value: "Liara",
-		Help:  "Liara Object Storage",
-	}, {
-		Value: "Linode",
-		Help:  "Linode Object Storage",
-	}, {
-		Value: "Magalu",
-		Help:  "Magalu Object Storage",
-	}, {
-		Value: "Minio",
-		Help:  "Minio Object Storage",
-	}, {
-		Value: "Netease",
-		Help:  "Netease Object Storage (NOS)",
-	}, {
-		Value: "Petabox",
-		Help:  "Petabox Object Storage",
-	}, {
-		Value: "RackCorp",
-		Help:  "RackCorp Object Storage",
-	}, {
-		Value: "Rclone",
-		Help:  "Rclone S3 Server",
-	}, {
-		Value: "Scaleway",
-		Help:  "Scaleway Object Storage",
-	}, {
-		Value: "SeaweedFS",
-		Help:  "SeaweedFS S3",
-	}, {
-		Value: "StackPath",
-		Help:  "StackPath Object Storage",
-	}, {
-		Value: "Storj",
-		Help:  "Storj (S3 Compatible Gateway)",
-	}, {
-		Value: "Synology",
-		Help:  "Synology C2 Object Storage",
-	}, {
-		Value: "TencentCOS",
-		Help:  "Tencent Cloud Object Storage (COS)",
-	}, {
-		Value: "Wasabi",
-		Help:  "Wasabi Object Storage",
-	}, {
-		Value: "Qiniu",
-		Help:  "Qiniu Object Storage (Kodo)",
-	}, {
-		Value: "Other",
-		Help:  "Any other S3 compatible provider",
-	}},
-}
-
-var providersList string
-
 // Register with Fs
 func init() {
-	var s strings.Builder
-	for i, provider := range providerOption.Examples {
-		if provider.Value == "Other" {
-			_, _ = s.WriteString(" and others")
-		} else {
-			if i != 0 {
-				_, _ = s.WriteString(", ")
-			}
-			_, _ = s.WriteString(provider.Value)
-		}
-	}
-	providersList = s.String()
-	fs.Register(&fs.RegInfo{
+	fs.Register(addProvidersToInfo(&fs.RegInfo{
 		Name:        "s3",
-		Description: "Amazon S3 Compliant Storage Providers including " + providersList,
+		Description: "Amazon S3 Compliant Storage Providers including ",
 		NewFs:       NewFs,
 		CommandHelp: commandHelp,
 		Config: func(ctx context.Context, name string, m configmap.Mapper, config fs.ConfigIn) (*fs.ConfigOut, error) {
@@ -207,7 +81,10 @@ func init() {
 			System: systemMetadataInfo,
 			Help:   `User metadata is stored as x-amz-meta- keys. S3 metadata keys are case insensitive and are always returned in lower case.`,
 		},
-		Options: []fs.Option{providerOption, {
+		Options: []fs.Option{{
+			Name: fs.ConfigProvider,
+			Help: "Choose your S3 provider.",
+		}, {
 			Name:    "env_auth",
 			Help:    "Get AWS credentials from runtime (environment variables or EC2/ECS meta data if no env vars).\n\nOnly applies if access_key_id and secret_access_key is blank.",
 			Default: false,
@@ -227,1578 +104,14 @@ func init() {
 			Help:      "AWS Secret Access Key (password).\n\nLeave blank for anonymous access or runtime credentials.",
 			Sensitive: true,
 		}, {
-			// References:
-			// 1. https://docs.aws.amazon.com/general/latest/gr/rande.html
-			// 2. https://docs.aws.amazon.com/general/latest/gr/s3.html
-			Name:     "region",
-			Help:     "Region to connect to.",
-			Provider: "AWS",
-			Examples: []fs.OptionExample{{
-				Value: "us-east-1",
-				Help:  "The default endpoint - a good choice if you are unsure.\nUS Region, Northern Virginia, or Pacific Northwest.\nLeave location constraint empty.",
-			}, {
-				Value: "us-east-2",
-				Help:  "US East (Ohio) Region.\nNeeds location constraint us-east-2.",
-			}, {
-				Value: "us-west-1",
-				Help:  "US West (Northern California) Region.\nNeeds location constraint us-west-1.",
-			}, {
-				Value: "us-west-2",
-				Help:  "US West (Oregon) Region.\nNeeds location constraint us-west-2.",
-			}, {
-				Value: "ca-central-1",
-				Help:  "Canada (Central) Region.\nNeeds location constraint ca-central-1.",
-			}, {
-				Value: "eu-west-1",
-				Help:  "EU (Ireland) Region.\nNeeds location constraint EU or eu-west-1.",
-			}, {
-				Value: "eu-west-2",
-				Help:  "EU (London) Region.\nNeeds location constraint eu-west-2.",
-			}, {
-				Value: "eu-west-3",
-				Help:  "EU (Paris) Region.\nNeeds location constraint eu-west-3.",
-			}, {
-				Value: "eu-north-1",
-				Help:  "EU (Stockholm) Region.\nNeeds location constraint eu-north-1.",
-			}, {
-				Value: "eu-south-1",
-				Help:  "EU (Milan) Region.\nNeeds location constraint eu-south-1.",
-			}, {
-				Value: "eu-central-1",
-				Help:  "EU (Frankfurt) Region.\nNeeds location constraint eu-central-1.",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "Asia Pacific (Singapore) Region.\nNeeds location constraint ap-southeast-1.",
-			}, {
-				Value: "ap-southeast-2",
-				Help:  "Asia Pacific (Sydney) Region.\nNeeds location constraint ap-southeast-2.",
-			}, {
-				Value: "ap-northeast-1",
-				Help:  "Asia Pacific (Tokyo) Region.\nNeeds location constraint ap-northeast-1.",
-			}, {
-				Value: "ap-northeast-2",
-				Help:  "Asia Pacific (Seoul).\nNeeds location constraint ap-northeast-2.",
-			}, {
-				Value: "ap-northeast-3",
-				Help:  "Asia Pacific (Osaka-Local).\nNeeds location constraint ap-northeast-3.",
-			}, {
-				Value: "ap-south-1",
-				Help:  "Asia Pacific (Mumbai).\nNeeds location constraint ap-south-1.",
-			}, {
-				Value: "ap-east-1",
-				Help:  "Asia Pacific (Hong Kong) Region.\nNeeds location constraint ap-east-1.",
-			}, {
-				Value: "sa-east-1",
-				Help:  "South America (Sao Paulo) Region.\nNeeds location constraint sa-east-1.",
-			}, {
-				Value: "il-central-1",
-				Help:  "Israel (Tel Aviv) Region.\nNeeds location constraint il-central-1.",
-			}, {
-				Value: "me-south-1",
-				Help:  "Middle East (Bahrain) Region.\nNeeds location constraint me-south-1.",
-			}, {
-				Value: "af-south-1",
-				Help:  "Africa (Cape Town) Region.\nNeeds location constraint af-south-1.",
-			}, {
-				Value: "cn-north-1",
-				Help:  "China (Beijing) Region.\nNeeds location constraint cn-north-1.",
-			}, {
-				Value: "cn-northwest-1",
-				Help:  "China (Ningxia) Region.\nNeeds location constraint cn-northwest-1.",
-			}, {
-				Value: "us-gov-east-1",
-				Help:  "AWS GovCloud (US-East) Region.\nNeeds location constraint us-gov-east-1.",
-			}, {
-				Value: "us-gov-west-1",
-				Help:  "AWS GovCloud (US) Region.\nNeeds location constraint us-gov-west-1.",
-			}},
+			Name: "region",
+			Help: "Region to connect to.\n\nLeave blank if you are using an S3 clone and you don't have a region.",
 		}, {
-			Name:     "region",
-			Help:     "region - the location where your bucket will be created and your data stored.\n",
-			Provider: "RackCorp",
-			Examples: []fs.OptionExample{{
-				Value: "global",
-				Help:  "Global CDN (All locations) Region",
-			}, {
-				Value: "au",
-				Help:  "Australia (All states)",
-			}, {
-				Value: "au-nsw",
-				Help:  "NSW (Australia) Region",
-			}, {
-				Value: "au-qld",
-				Help:  "QLD (Australia) Region",
-			}, {
-				Value: "au-vic",
-				Help:  "VIC (Australia) Region",
-			}, {
-				Value: "au-wa",
-				Help:  "Perth (Australia) Region",
-			}, {
-				Value: "ph",
-				Help:  "Manila (Philippines) Region",
-			}, {
-				Value: "th",
-				Help:  "Bangkok (Thailand) Region",
-			}, {
-				Value: "hk",
-				Help:  "HK (Hong Kong) Region",
-			}, {
-				Value: "mn",
-				Help:  "Ulaanbaatar (Mongolia) Region",
-			}, {
-				Value: "kg",
-				Help:  "Bishkek (Kyrgyzstan) Region",
-			}, {
-				Value: "id",
-				Help:  "Jakarta (Indonesia) Region",
-			}, {
-				Value: "jp",
-				Help:  "Tokyo (Japan) Region",
-			}, {
-				Value: "sg",
-				Help:  "SG (Singapore) Region",
-			}, {
-				Value: "de",
-				Help:  "Frankfurt (Germany) Region",
-			}, {
-				Value: "us",
-				Help:  "USA (AnyCast) Region",
-			}, {
-				Value: "us-east-1",
-				Help:  "New York (USA) Region",
-			}, {
-				Value: "us-west-1",
-				Help:  "Freemont (USA) Region",
-			}, {
-				Value: "nz",
-				Help:  "Auckland (New Zealand) Region",
-			}},
+			Name: "endpoint",
+			Help: "Endpoint for S3 API.\n\nRequired when using an S3 clone.",
 		}, {
-			Name:     "region",
-			Help:     "Region to connect to.",
-			Provider: "Scaleway",
-			Examples: []fs.OptionExample{{
-				Value: "nl-ams",
-				Help:  "Amsterdam, The Netherlands",
-			}, {
-				Value: "fr-par",
-				Help:  "Paris, France",
-			}, {
-				Value: "pl-waw",
-				Help:  "Warsaw, Poland",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region to connect to. - the location where your bucket will be created and your data stored. Need bo be same with your endpoint.\n",
-			Provider: "HuaweiOBS",
-			Examples: []fs.OptionExample{{
-				Value: "af-south-1",
-				Help:  "AF-Johannesburg",
-			}, {
-				Value: "ap-southeast-2",
-				Help:  "AP-Bangkok",
-			}, {
-				Value: "ap-southeast-3",
-				Help:  "AP-Singapore",
-			}, {
-				Value: "cn-east-3",
-				Help:  "CN East-Shanghai1",
-			}, {
-				Value: "cn-east-2",
-				Help:  "CN East-Shanghai2",
-			}, {
-				Value: "cn-north-1",
-				Help:  "CN North-Beijing1",
-			}, {
-				Value: "cn-north-4",
-				Help:  "CN North-Beijing4",
-			}, {
-				Value: "cn-south-1",
-				Help:  "CN South-Guangzhou",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "CN-Hong Kong",
-			}, {
-				Value: "sa-argentina-1",
-				Help:  "LA-Buenos Aires1",
-			}, {
-				Value: "sa-peru-1",
-				Help:  "LA-Lima1",
-			}, {
-				Value: "na-mexico-1",
-				Help:  "LA-Mexico City1",
-			}, {
-				Value: "sa-chile-1",
-				Help:  "LA-Santiago2",
-			}, {
-				Value: "sa-brazil-1",
-				Help:  "LA-Sao Paulo1",
-			}, {
-				Value: "ru-northwest-2",
-				Help:  "RU-Moscow2",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region to connect to.",
-			Provider: "Cloudflare",
-			Examples: []fs.OptionExample{{
-				Value: "auto",
-				Help:  "R2 buckets are automatically distributed across Cloudflare's data centers for low latency.",
-			}},
-		}, {
-			// References:
-			// https://developer.qiniu.com/kodo/4088/s3-access-domainname
-			Name:     "region",
-			Help:     "Region to connect to.",
-			Provider: "Qiniu",
-			Examples: []fs.OptionExample{{
-				Value: "cn-east-1",
-				Help:  "The default endpoint - a good choice if you are unsure.\nEast China Region 1.\nNeeds location constraint cn-east-1.",
-			}, {
-				Value: "cn-east-2",
-				Help:  "East China Region 2.\nNeeds location constraint cn-east-2.",
-			}, {
-				Value: "cn-north-1",
-				Help:  "North China Region 1.\nNeeds location constraint cn-north-1.",
-			}, {
-				Value: "cn-south-1",
-				Help:  "South China Region 1.\nNeeds location constraint cn-south-1.",
-			}, {
-				Value: "us-north-1",
-				Help:  "North America Region.\nNeeds location constraint us-north-1.",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "Southeast Asia Region 1.\nNeeds location constraint ap-southeast-1.",
-			}, {
-				Value: "ap-northeast-1",
-				Help:  "Northeast Asia Region 1.\nNeeds location constraint ap-northeast-1.",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region where your bucket will be created and your data stored.\n",
-			Provider: "IONOS",
-			Examples: []fs.OptionExample{{
-				Value: "de",
-				Help:  "Frankfurt, Germany",
-			}, {
-				Value: "eu-central-2",
-				Help:  "Berlin, Germany",
-			}, {
-				Value: "eu-south-2",
-				Help:  "Logrono, Spain",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region where your bucket will be created and your data stored.\n",
-			Provider: "Petabox",
-			Examples: []fs.OptionExample{{
-				Value: "us-east-1",
-				Help:  "US East (N. Virginia)",
-			}, {
-				Value: "eu-central-1",
-				Help:  "Europe (Frankfurt)",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "Asia Pacific (Singapore)",
-			}, {
-				Value: "me-south-1",
-				Help:  "Middle East (Bahrain)",
-			}, {
-				Value: "sa-east-1",
-				Help:  "South America (São Paulo)",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region where your data stored.\n",
-			Provider: "Synology",
-			Examples: []fs.OptionExample{{
-				Value: "eu-001",
-				Help:  "Europe Region 1",
-			}, {
-				Value: "eu-002",
-				Help:  "Europe Region 2",
-			}, {
-				Value: "us-001",
-				Help:  "US Region 1",
-			}, {
-				Value: "us-002",
-				Help:  "US Region 2",
-			}, {
-				Value: "tw-001",
-				Help:  "Asia (Taiwan)",
-			}},
-		}, {
-			Name:     "region",
-			Help:     "Region to connect to.\n\nLeave blank if you are using an S3 clone and you don't have a region.",
-			Provider: "!AWS,Alibaba,ArvanCloud,ChinaMobile,Cloudflare,IONOS,Petabox,Liara,Linode,Magalu,Qiniu,RackCorp,Scaleway,Storj,Synology,TencentCOS,HuaweiOBS,IDrive",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Use this if unsure.\nWill use v4 signatures and an empty region.",
-			}, {
-				Value: "other-v2-signature",
-				Help:  "Use this only if v4 signatures don't work.\nE.g. pre Jewel/v10 CEPH.",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for S3 API.\n\nLeave blank if using AWS to use the default endpoint for the region.",
-			Provider: "AWS",
-		}, {
-			// ChinaMobile endpoints: https://ecloud.10086.cn/op-help-center/doc/article/24534
-			Name:     "endpoint",
-			Help:     "Endpoint for China Mobile Ecloud Elastic Object Storage (EOS) API.",
-			Provider: "ChinaMobile",
-			Examples: []fs.OptionExample{{
-				Value: "eos-wuxi-1.cmecloud.cn",
-				Help:  "The default endpoint - a good choice if you are unsure.\nEast China (Suzhou)",
-			}, {
-				Value: "eos-jinan-1.cmecloud.cn",
-				Help:  "East China (Jinan)",
-			}, {
-				Value: "eos-ningbo-1.cmecloud.cn",
-				Help:  "East China (Hangzhou)",
-			}, {
-				Value: "eos-shanghai-1.cmecloud.cn",
-				Help:  "East China (Shanghai-1)",
-			}, {
-				Value: "eos-zhengzhou-1.cmecloud.cn",
-				Help:  "Central China (Zhengzhou)",
-			}, {
-				Value: "eos-hunan-1.cmecloud.cn",
-				Help:  "Central China (Changsha-1)",
-			}, {
-				Value: "eos-zhuzhou-1.cmecloud.cn",
-				Help:  "Central China (Changsha-2)",
-			}, {
-				Value: "eos-guangzhou-1.cmecloud.cn",
-				Help:  "South China (Guangzhou-2)",
-			}, {
-				Value: "eos-dongguan-1.cmecloud.cn",
-				Help:  "South China (Guangzhou-3)",
-			}, {
-				Value: "eos-beijing-1.cmecloud.cn",
-				Help:  "North China (Beijing-1)",
-			}, {
-				Value: "eos-beijing-2.cmecloud.cn",
-				Help:  "North China (Beijing-2)",
-			}, {
-				Value: "eos-beijing-4.cmecloud.cn",
-				Help:  "North China (Beijing-3)",
-			}, {
-				Value: "eos-huhehaote-1.cmecloud.cn",
-				Help:  "North China (Huhehaote)",
-			}, {
-				Value: "eos-chengdu-1.cmecloud.cn",
-				Help:  "Southwest China (Chengdu)",
-			}, {
-				Value: "eos-chongqing-1.cmecloud.cn",
-				Help:  "Southwest China (Chongqing)",
-			}, {
-				Value: "eos-guiyang-1.cmecloud.cn",
-				Help:  "Southwest China (Guiyang)",
-			}, {
-				Value: "eos-xian-1.cmecloud.cn",
-				Help:  "Nouthwest China (Xian)",
-			}, {
-				Value: "eos-yunnan.cmecloud.cn",
-				Help:  "Yunnan China (Kunming)",
-			}, {
-				Value: "eos-yunnan-2.cmecloud.cn",
-				Help:  "Yunnan China (Kunming-2)",
-			}, {
-				Value: "eos-tianjin-1.cmecloud.cn",
-				Help:  "Tianjin China (Tianjin)",
-			}, {
-				Value: "eos-jilin-1.cmecloud.cn",
-				Help:  "Jilin China (Changchun)",
-			}, {
-				Value: "eos-hubei-1.cmecloud.cn",
-				Help:  "Hubei China (Xiangyan)",
-			}, {
-				Value: "eos-jiangxi-1.cmecloud.cn",
-				Help:  "Jiangxi China (Nanchang)",
-			}, {
-				Value: "eos-gansu-1.cmecloud.cn",
-				Help:  "Gansu China (Lanzhou)",
-			}, {
-				Value: "eos-shanxi-1.cmecloud.cn",
-				Help:  "Shanxi China (Taiyuan)",
-			}, {
-				Value: "eos-liaoning-1.cmecloud.cn",
-				Help:  "Liaoning China (Shenyang)",
-			}, {
-				Value: "eos-hebei-1.cmecloud.cn",
-				Help:  "Hebei China (Shijiazhuang)",
-			}, {
-				Value: "eos-fujian-1.cmecloud.cn",
-				Help:  "Fujian China (Xiamen)",
-			}, {
-				Value: "eos-guangxi-1.cmecloud.cn",
-				Help:  "Guangxi China (Nanning)",
-			}, {
-				Value: "eos-anhui-1.cmecloud.cn",
-				Help:  "Anhui China (Huainan)",
-			}},
-		}, {
-			// ArvanCloud endpoints: https://www.arvancloud.ir/en/products/cloud-storage
-			Name:     "endpoint",
-			Help:     "Endpoint for Arvan Cloud Object Storage (AOS) API.",
-			Provider: "ArvanCloud",
-			Examples: []fs.OptionExample{{
-				Value: "s3.ir-thr-at1.arvanstorage.ir",
-				Help:  "The default endpoint - a good choice if you are unsure.\nTehran Iran (Simin)",
-			}, {
-				Value: "s3.ir-tbz-sh1.arvanstorage.ir",
-				Help:  "Tabriz Iran (Shahriar)",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for IBM COS S3 API.\n\nSpecify if using an IBM COS On Premise.",
-			Provider: "IBMCOS",
-			Examples: []fs.OptionExample{{
-				Value: "s3.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Endpoint",
-			}, {
-				Value: "s3.dal.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Dallas Endpoint",
-			}, {
-				Value: "s3.wdc.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Washington DC Endpoint",
-			}, {
-				Value: "s3.sjc.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region San Jose Endpoint",
-			}, {
-				Value: "s3.private.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Private Endpoint",
-			}, {
-				Value: "s3.private.dal.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Dallas Private Endpoint",
-			}, {
-				Value: "s3.private.wdc.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region Washington DC Private Endpoint",
-			}, {
-				Value: "s3.private.sjc.us.cloud-object-storage.appdomain.cloud",
-				Help:  "US Cross Region San Jose Private Endpoint",
-			}, {
-				Value: "s3.us-east.cloud-object-storage.appdomain.cloud",
-				Help:  "US Region East Endpoint",
-			}, {
-				Value: "s3.private.us-east.cloud-object-storage.appdomain.cloud",
-				Help:  "US Region East Private Endpoint",
-			}, {
-				Value: "s3.us-south.cloud-object-storage.appdomain.cloud",
-				Help:  "US Region South Endpoint",
-			}, {
-				Value: "s3.private.us-south.cloud-object-storage.appdomain.cloud",
-				Help:  "US Region South Private Endpoint",
-			}, {
-				Value: "s3.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Endpoint",
-			}, {
-				Value: "s3.fra.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Frankfurt Endpoint",
-			}, {
-				Value: "s3.mil.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Milan Endpoint",
-			}, {
-				Value: "s3.ams.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Amsterdam Endpoint",
-			}, {
-				Value: "s3.private.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Private Endpoint",
-			}, {
-				Value: "s3.private.fra.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Frankfurt Private Endpoint",
-			}, {
-				Value: "s3.private.mil.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Milan Private Endpoint",
-			}, {
-				Value: "s3.private.ams.eu.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Cross Region Amsterdam Private Endpoint",
-			}, {
-				Value: "s3.eu-gb.cloud-object-storage.appdomain.cloud",
-				Help:  "Great Britain Endpoint",
-			}, {
-				Value: "s3.private.eu-gb.cloud-object-storage.appdomain.cloud",
-				Help:  "Great Britain Private Endpoint",
-			}, {
-				Value: "s3.eu-de.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Region DE Endpoint",
-			}, {
-				Value: "s3.private.eu-de.cloud-object-storage.appdomain.cloud",
-				Help:  "EU Region DE Private Endpoint",
-			}, {
-				Value: "s3.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Endpoint",
-			}, {
-				Value: "s3.tok.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Tokyo Endpoint",
-			}, {
-				Value: "s3.hkg.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional HongKong Endpoint",
-			}, {
-				Value: "s3.seo.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Seoul Endpoint",
-			}, {
-				Value: "s3.private.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Private Endpoint",
-			}, {
-				Value: "s3.private.tok.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Tokyo Private Endpoint",
-			}, {
-				Value: "s3.private.hkg.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional HongKong Private Endpoint",
-			}, {
-				Value: "s3.private.seo.ap.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Cross Regional Seoul Private Endpoint",
-			}, {
-				Value: "s3.jp-tok.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Region Japan Endpoint",
-			}, {
-				Value: "s3.private.jp-tok.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Region Japan Private Endpoint",
-			}, {
-				Value: "s3.au-syd.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Region Australia Endpoint",
-			}, {
-				Value: "s3.private.au-syd.cloud-object-storage.appdomain.cloud",
-				Help:  "APAC Region Australia Private Endpoint",
-			}, {
-				Value: "s3.ams03.cloud-object-storage.appdomain.cloud",
-				Help:  "Amsterdam Single Site Endpoint",
-			}, {
-				Value: "s3.private.ams03.cloud-object-storage.appdomain.cloud",
-				Help:  "Amsterdam Single Site Private Endpoint",
-			}, {
-				Value: "s3.che01.cloud-object-storage.appdomain.cloud",
-				Help:  "Chennai Single Site Endpoint",
-			}, {
-				Value: "s3.private.che01.cloud-object-storage.appdomain.cloud",
-				Help:  "Chennai Single Site Private Endpoint",
-			}, {
-				Value: "s3.mel01.cloud-object-storage.appdomain.cloud",
-				Help:  "Melbourne Single Site Endpoint",
-			}, {
-				Value: "s3.private.mel01.cloud-object-storage.appdomain.cloud",
-				Help:  "Melbourne Single Site Private Endpoint",
-			}, {
-				Value: "s3.osl01.cloud-object-storage.appdomain.cloud",
-				Help:  "Oslo Single Site Endpoint",
-			}, {
-				Value: "s3.private.osl01.cloud-object-storage.appdomain.cloud",
-				Help:  "Oslo Single Site Private Endpoint",
-			}, {
-				Value: "s3.tor01.cloud-object-storage.appdomain.cloud",
-				Help:  "Toronto Single Site Endpoint",
-			}, {
-				Value: "s3.private.tor01.cloud-object-storage.appdomain.cloud",
-				Help:  "Toronto Single Site Private Endpoint",
-			}, {
-				Value: "s3.seo01.cloud-object-storage.appdomain.cloud",
-				Help:  "Seoul Single Site Endpoint",
-			}, {
-				Value: "s3.private.seo01.cloud-object-storage.appdomain.cloud",
-				Help:  "Seoul Single Site Private Endpoint",
-			}, {
-				Value: "s3.mon01.cloud-object-storage.appdomain.cloud",
-				Help:  "Montreal Single Site Endpoint",
-			}, {
-				Value: "s3.private.mon01.cloud-object-storage.appdomain.cloud",
-				Help:  "Montreal Single Site Private Endpoint",
-			}, {
-				Value: "s3.mex01.cloud-object-storage.appdomain.cloud",
-				Help:  "Mexico Single Site Endpoint",
-			}, {
-				Value: "s3.private.mex01.cloud-object-storage.appdomain.cloud",
-				Help:  "Mexico Single Site Private Endpoint",
-			}, {
-				Value: "s3.sjc04.cloud-object-storage.appdomain.cloud",
-				Help:  "San Jose Single Site Endpoint",
-			}, {
-				Value: "s3.private.sjc04.cloud-object-storage.appdomain.cloud",
-				Help:  "San Jose Single Site Private Endpoint",
-			}, {
-				Value: "s3.mil01.cloud-object-storage.appdomain.cloud",
-				Help:  "Milan Single Site Endpoint",
-			}, {
-				Value: "s3.private.mil01.cloud-object-storage.appdomain.cloud",
-				Help:  "Milan Single Site Private Endpoint",
-			}, {
-				Value: "s3.hkg02.cloud-object-storage.appdomain.cloud",
-				Help:  "Hong Kong Single Site Endpoint",
-			}, {
-				Value: "s3.private.hkg02.cloud-object-storage.appdomain.cloud",
-				Help:  "Hong Kong Single Site Private Endpoint",
-			}, {
-				Value: "s3.par01.cloud-object-storage.appdomain.cloud",
-				Help:  "Paris Single Site Endpoint",
-			}, {
-				Value: "s3.private.par01.cloud-object-storage.appdomain.cloud",
-				Help:  "Paris Single Site Private Endpoint",
-			}, {
-				Value: "s3.sng01.cloud-object-storage.appdomain.cloud",
-				Help:  "Singapore Single Site Endpoint",
-			}, {
-				Value: "s3.private.sng01.cloud-object-storage.appdomain.cloud",
-				Help:  "Singapore Single Site Private Endpoint",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for IONOS S3 Object Storage.\n\nSpecify the endpoint from the same region.",
-			Provider: "IONOS",
-			Examples: []fs.OptionExample{{
-				Value: "s3-eu-central-1.ionoscloud.com",
-				Help:  "Frankfurt, Germany",
-			}, {
-				Value: "s3-eu-central-2.ionoscloud.com",
-				Help:  "Berlin, Germany",
-			}, {
-				Value: "s3-eu-south-2.ionoscloud.com",
-				Help:  "Logrono, Spain",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for Petabox S3 Object Storage.\n\nSpecify the endpoint from the same region.",
-			Provider: "Petabox",
-			Required: true,
-			Examples: []fs.OptionExample{{
-				Value: "s3.petabox.io",
-				Help:  "US East (N. Virginia)",
-			}, {
-				Value: "s3.us-east-1.petabox.io",
-				Help:  "US East (N. Virginia)",
-			}, {
-				Value: "s3.eu-central-1.petabox.io",
-				Help:  "Europe (Frankfurt)",
-			}, {
-				Value: "s3.ap-southeast-1.petabox.io",
-				Help:  "Asia Pacific (Singapore)",
-			}, {
-				Value: "s3.me-south-1.petabox.io",
-				Help:  "Middle East (Bahrain)",
-			}, {
-				Value: "s3.sa-east-1.petabox.io",
-				Help:  "South America (São Paulo)",
-			}},
-		}, {
-			// Leviia endpoints: https://www.leviia.com/object-storage/
-			Name:     "endpoint",
-			Help:     "Endpoint for Leviia Object Storage API.",
-			Provider: "Leviia",
-			Examples: []fs.OptionExample{{
-				Value: "s3.leviia.com",
-				Help:  "The default endpoint\nLeviia",
-			}},
-		}, {
-			// Liara endpoints: https://liara.ir/landing/object-storage
-			Name:     "endpoint",
-			Help:     "Endpoint for Liara Object Storage API.",
-			Provider: "Liara",
-			Examples: []fs.OptionExample{{
-				Value: "storage.iran.liara.space",
-				Help:  "The default endpoint\nIran",
-			}},
-		}, {
-			// Linode endpoints: https://www.linode.com/docs/products/storage/object-storage/guides/urls/#cluster-url-s3-endpoint
-			Name:     "endpoint",
-			Help:     "Endpoint for Linode Object Storage API.",
-			Provider: "Linode",
-			Examples: []fs.OptionExample{{
-				Value: "us-southeast-1.linodeobjects.com",
-				Help:  "Atlanta, GA (USA), us-southeast-1",
-			}, {
-				Value: "us-ord-1.linodeobjects.com",
-				Help:  "Chicago, IL (USA), us-ord-1",
-			}, {
-				Value: "eu-central-1.linodeobjects.com",
-				Help:  "Frankfurt (Germany), eu-central-1",
-			}, {
-				Value: "it-mil-1.linodeobjects.com",
-				Help:  "Milan (Italy), it-mil-1",
-			}, {
-				Value: "us-east-1.linodeobjects.com",
-				Help:  "Newark, NJ (USA), us-east-1",
-			}, {
-				Value: "fr-par-1.linodeobjects.com",
-				Help:  "Paris (France), fr-par-1",
-			}, {
-				Value: "us-sea-1.linodeobjects.com",
-				Help:  "Seattle, WA (USA), us-sea-1",
-			}, {
-				Value: "ap-south-1.linodeobjects.com",
-				Help:  "Singapore ap-south-1",
-			}, {
-				Value: "se-sto-1.linodeobjects.com",
-				Help:  "Stockholm (Sweden), se-sto-1",
-			}, {
-				Value: "us-iad-1.linodeobjects.com",
-				Help:  "Washington, DC, (USA), us-iad-1",
-			}},
-		}, {
-			// Magalu endpoints: https://docs.magalu.cloud/docs/object-storage/how-to/copy-url
-			Name:     "endpoint",
-			Help:     "Endpoint for Magalu Object Storage API.",
-			Provider: "Magalu",
-			Examples: []fs.OptionExample{{
-				Value: "br-se1.magaluobjects.com",
-				Help:  "São Paulo, SP (BR), br-se1",
-			}, {
-				Value: "br-ne1.magaluobjects.com",
-				Help:  "Fortaleza, CE (BR), br-ne1",
-			},
-			},
-		}, {
-			// oss endpoints: https://help.aliyun.com/document_detail/31837.html
-			Name:     "endpoint",
-			Help:     "Endpoint for OSS API.",
-			Provider: "Alibaba",
-			Examples: []fs.OptionExample{{
-				Value: "oss-accelerate.aliyuncs.com",
-				Help:  "Global Accelerate",
-			}, {
-				Value: "oss-accelerate-overseas.aliyuncs.com",
-				Help:  "Global Accelerate (outside mainland China)",
-			}, {
-				Value: "oss-cn-hangzhou.aliyuncs.com",
-				Help:  "East China 1 (Hangzhou)",
-			}, {
-				Value: "oss-cn-shanghai.aliyuncs.com",
-				Help:  "East China 2 (Shanghai)",
-			}, {
-				Value: "oss-cn-qingdao.aliyuncs.com",
-				Help:  "North China 1 (Qingdao)",
-			}, {
-				Value: "oss-cn-beijing.aliyuncs.com",
-				Help:  "North China 2 (Beijing)",
-			}, {
-				Value: "oss-cn-zhangjiakou.aliyuncs.com",
-				Help:  "North China 3 (Zhangjiakou)",
-			}, {
-				Value: "oss-cn-huhehaote.aliyuncs.com",
-				Help:  "North China 5 (Hohhot)",
-			}, {
-				Value: "oss-cn-wulanchabu.aliyuncs.com",
-				Help:  "North China 6 (Ulanqab)",
-			}, {
-				Value: "oss-cn-shenzhen.aliyuncs.com",
-				Help:  "South China 1 (Shenzhen)",
-			}, {
-				Value: "oss-cn-heyuan.aliyuncs.com",
-				Help:  "South China 2 (Heyuan)",
-			}, {
-				Value: "oss-cn-guangzhou.aliyuncs.com",
-				Help:  "South China 3 (Guangzhou)",
-			}, {
-				Value: "oss-cn-chengdu.aliyuncs.com",
-				Help:  "West China 1 (Chengdu)",
-			}, {
-				Value: "oss-cn-hongkong.aliyuncs.com",
-				Help:  "Hong Kong (Hong Kong)",
-			}, {
-				Value: "oss-us-west-1.aliyuncs.com",
-				Help:  "US West 1 (Silicon Valley)",
-			}, {
-				Value: "oss-us-east-1.aliyuncs.com",
-				Help:  "US East 1 (Virginia)",
-			}, {
-				Value: "oss-ap-southeast-1.aliyuncs.com",
-				Help:  "Southeast Asia Southeast 1 (Singapore)",
-			}, {
-				Value: "oss-ap-southeast-2.aliyuncs.com",
-				Help:  "Asia Pacific Southeast 2 (Sydney)",
-			}, {
-				Value: "oss-ap-southeast-3.aliyuncs.com",
-				Help:  "Southeast Asia Southeast 3 (Kuala Lumpur)",
-			}, {
-				Value: "oss-ap-southeast-5.aliyuncs.com",
-				Help:  "Asia Pacific Southeast 5 (Jakarta)",
-			}, {
-				Value: "oss-ap-northeast-1.aliyuncs.com",
-				Help:  "Asia Pacific Northeast 1 (Japan)",
-			}, {
-				Value: "oss-ap-south-1.aliyuncs.com",
-				Help:  "Asia Pacific South 1 (Mumbai)",
-			}, {
-				Value: "oss-eu-central-1.aliyuncs.com",
-				Help:  "Central Europe 1 (Frankfurt)",
-			}, {
-				Value: "oss-eu-west-1.aliyuncs.com",
-				Help:  "West Europe (London)",
-			}, {
-				Value: "oss-me-east-1.aliyuncs.com",
-				Help:  "Middle East 1 (Dubai)",
-			}},
-		}, {
-			// obs endpoints: https://developer.huaweicloud.com/intl/en-us/endpoint?OBS
-			Name:     "endpoint",
-			Help:     "Endpoint for OBS API.",
-			Provider: "HuaweiOBS",
-			Examples: []fs.OptionExample{{
-				Value: "obs.af-south-1.myhuaweicloud.com",
-				Help:  "AF-Johannesburg",
-			}, {
-				Value: "obs.ap-southeast-2.myhuaweicloud.com",
-				Help:  "AP-Bangkok",
-			}, {
-				Value: "obs.ap-southeast-3.myhuaweicloud.com",
-				Help:  "AP-Singapore",
-			}, {
-				Value: "obs.cn-east-3.myhuaweicloud.com",
-				Help:  "CN East-Shanghai1",
-			}, {
-				Value: "obs.cn-east-2.myhuaweicloud.com",
-				Help:  "CN East-Shanghai2",
-			}, {
-				Value: "obs.cn-north-1.myhuaweicloud.com",
-				Help:  "CN North-Beijing1",
-			}, {
-				Value: "obs.cn-north-4.myhuaweicloud.com",
-				Help:  "CN North-Beijing4",
-			}, {
-				Value: "obs.cn-south-1.myhuaweicloud.com",
-				Help:  "CN South-Guangzhou",
-			}, {
-				Value: "obs.ap-southeast-1.myhuaweicloud.com",
-				Help:  "CN-Hong Kong",
-			}, {
-				Value: "obs.sa-argentina-1.myhuaweicloud.com",
-				Help:  "LA-Buenos Aires1",
-			}, {
-				Value: "obs.sa-peru-1.myhuaweicloud.com",
-				Help:  "LA-Lima1",
-			}, {
-				Value: "obs.na-mexico-1.myhuaweicloud.com",
-				Help:  "LA-Mexico City1",
-			}, {
-				Value: "obs.sa-chile-1.myhuaweicloud.com",
-				Help:  "LA-Santiago2",
-			}, {
-				Value: "obs.sa-brazil-1.myhuaweicloud.com",
-				Help:  "LA-Sao Paulo1",
-			}, {
-				Value: "obs.ru-northwest-2.myhuaweicloud.com",
-				Help:  "RU-Moscow2",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for Scaleway Object Storage.",
-			Provider: "Scaleway",
-			Examples: []fs.OptionExample{{
-				Value: "s3.nl-ams.scw.cloud",
-				Help:  "Amsterdam Endpoint",
-			}, {
-				Value: "s3.fr-par.scw.cloud",
-				Help:  "Paris Endpoint",
-			}, {
-				Value: "s3.pl-waw.scw.cloud",
-				Help:  "Warsaw Endpoint",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for StackPath Object Storage.",
-			Provider: "StackPath",
-			Examples: []fs.OptionExample{{
-				Value: "s3.us-east-2.stackpathstorage.com",
-				Help:  "US East Endpoint",
-			}, {
-				Value: "s3.us-west-1.stackpathstorage.com",
-				Help:  "US West Endpoint",
-			}, {
-				Value: "s3.eu-central-1.stackpathstorage.com",
-				Help:  "EU Endpoint",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for Google Cloud Storage.",
-			Provider: "GCS",
-			Examples: []fs.OptionExample{{
-				Value: "https://storage.googleapis.com",
-				Help:  "Google Cloud Storage endpoint",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for Storj Gateway.",
-			Provider: "Storj",
-			Examples: []fs.OptionExample{{
-				Value: "gateway.storjshare.io",
-				Help:  "Global Hosted Gateway",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for Synology C2 Object Storage API.",
-			Provider: "Synology",
-			Examples: []fs.OptionExample{{
-				Value: "eu-001.s3.synologyc2.net",
-				Help:  "EU Endpoint 1",
-			}, {
-				Value: "eu-002.s3.synologyc2.net",
-				Help:  "EU Endpoint 2",
-			}, {
-				Value: "us-001.s3.synologyc2.net",
-				Help:  "US Endpoint 1",
-			}, {
-				Value: "us-002.s3.synologyc2.net",
-				Help:  "US Endpoint 2",
-			}, {
-				Value: "tw-001.s3.synologyc2.net",
-				Help:  "TW Endpoint 1",
-			}},
-		}, {
-			// cos endpoints: https://intl.cloud.tencent.com/document/product/436/6224
-			Name:     "endpoint",
-			Help:     "Endpoint for Tencent COS API.",
-			Provider: "TencentCOS",
-			Examples: []fs.OptionExample{{
-				Value: "cos.ap-beijing.myqcloud.com",
-				Help:  "Beijing Region",
-			}, {
-				Value: "cos.ap-nanjing.myqcloud.com",
-				Help:  "Nanjing Region",
-			}, {
-				Value: "cos.ap-shanghai.myqcloud.com",
-				Help:  "Shanghai Region",
-			}, {
-				Value: "cos.ap-guangzhou.myqcloud.com",
-				Help:  "Guangzhou Region",
-			}, {
-				Value: "cos.ap-nanjing.myqcloud.com",
-				Help:  "Nanjing Region",
-			}, {
-				Value: "cos.ap-chengdu.myqcloud.com",
-				Help:  "Chengdu Region",
-			}, {
-				Value: "cos.ap-chongqing.myqcloud.com",
-				Help:  "Chongqing Region",
-			}, {
-				Value: "cos.ap-hongkong.myqcloud.com",
-				Help:  "Hong Kong (China) Region",
-			}, {
-				Value: "cos.ap-singapore.myqcloud.com",
-				Help:  "Singapore Region",
-			}, {
-				Value: "cos.ap-mumbai.myqcloud.com",
-				Help:  "Mumbai Region",
-			}, {
-				Value: "cos.ap-seoul.myqcloud.com",
-				Help:  "Seoul Region",
-			}, {
-				Value: "cos.ap-bangkok.myqcloud.com",
-				Help:  "Bangkok Region",
-			}, {
-				Value: "cos.ap-tokyo.myqcloud.com",
-				Help:  "Tokyo Region",
-			}, {
-				Value: "cos.na-siliconvalley.myqcloud.com",
-				Help:  "Silicon Valley Region",
-			}, {
-				Value: "cos.na-ashburn.myqcloud.com",
-				Help:  "Virginia Region",
-			}, {
-				Value: "cos.na-toronto.myqcloud.com",
-				Help:  "Toronto Region",
-			}, {
-				Value: "cos.eu-frankfurt.myqcloud.com",
-				Help:  "Frankfurt Region",
-			}, {
-				Value: "cos.eu-moscow.myqcloud.com",
-				Help:  "Moscow Region",
-			}, {
-				Value: "cos.accelerate.myqcloud.com",
-				Help:  "Use Tencent COS Accelerate Endpoint",
-			}},
-		}, {
-			// RackCorp endpoints: https://www.rackcorp.com/storage/s3storage
-			Name:     "endpoint",
-			Help:     "Endpoint for RackCorp Object Storage.",
-			Provider: "RackCorp",
-			Examples: []fs.OptionExample{{
-				Value: "s3.rackcorp.com",
-				Help:  "Global (AnyCast) Endpoint",
-			}, {
-				Value: "au.s3.rackcorp.com",
-				Help:  "Australia (Anycast) Endpoint",
-			}, {
-				Value: "au-nsw.s3.rackcorp.com",
-				Help:  "Sydney (Australia) Endpoint",
-			}, {
-				Value: "au-qld.s3.rackcorp.com",
-				Help:  "Brisbane (Australia) Endpoint",
-			}, {
-				Value: "au-vic.s3.rackcorp.com",
-				Help:  "Melbourne (Australia) Endpoint",
-			}, {
-				Value: "au-wa.s3.rackcorp.com",
-				Help:  "Perth (Australia) Endpoint",
-			}, {
-				Value: "ph.s3.rackcorp.com",
-				Help:  "Manila (Philippines) Endpoint",
-			}, {
-				Value: "th.s3.rackcorp.com",
-				Help:  "Bangkok (Thailand) Endpoint",
-			}, {
-				Value: "hk.s3.rackcorp.com",
-				Help:  "HK (Hong Kong) Endpoint",
-			}, {
-				Value: "mn.s3.rackcorp.com",
-				Help:  "Ulaanbaatar (Mongolia) Endpoint",
-			}, {
-				Value: "kg.s3.rackcorp.com",
-				Help:  "Bishkek (Kyrgyzstan) Endpoint",
-			}, {
-				Value: "id.s3.rackcorp.com",
-				Help:  "Jakarta (Indonesia) Endpoint",
-			}, {
-				Value: "jp.s3.rackcorp.com",
-				Help:  "Tokyo (Japan) Endpoint",
-			}, {
-				Value: "sg.s3.rackcorp.com",
-				Help:  "SG (Singapore) Endpoint",
-			}, {
-				Value: "de.s3.rackcorp.com",
-				Help:  "Frankfurt (Germany) Endpoint",
-			}, {
-				Value: "us.s3.rackcorp.com",
-				Help:  "USA (AnyCast) Endpoint",
-			}, {
-				Value: "us-east-1.s3.rackcorp.com",
-				Help:  "New York (USA) Endpoint",
-			}, {
-				Value: "us-west-1.s3.rackcorp.com",
-				Help:  "Freemont (USA) Endpoint",
-			}, {
-				Value: "nz.s3.rackcorp.com",
-				Help:  "Auckland (New Zealand) Endpoint",
-			}},
-		}, {
-			// Qiniu endpoints: https://developer.qiniu.com/kodo/4088/s3-access-domainname
-			Name:     "endpoint",
-			Help:     "Endpoint for Qiniu Object Storage.",
-			Provider: "Qiniu",
-			Examples: []fs.OptionExample{{
-				Value: "s3-cn-east-1.qiniucs.com",
-				Help:  "East China Endpoint 1",
-			}, {
-				Value: "s3-cn-east-2.qiniucs.com",
-				Help:  "East China Endpoint 2",
-			}, {
-				Value: "s3-cn-north-1.qiniucs.com",
-				Help:  "North China Endpoint 1",
-			}, {
-				Value: "s3-cn-south-1.qiniucs.com",
-				Help:  "South China Endpoint 1",
-			}, {
-				Value: "s3-us-north-1.qiniucs.com",
-				Help:  "North America Endpoint 1",
-			}, {
-				Value: "s3-ap-southeast-1.qiniucs.com",
-				Help:  "Southeast Asia Endpoint 1",
-			}, {
-				Value: "s3-ap-northeast-1.qiniucs.com",
-				Help:  "Northeast Asia Endpoint 1",
-			}},
-		}, {
-			Name:     "endpoint",
-			Help:     "Endpoint for S3 API.\n\nRequired when using an S3 clone.",
-			Provider: "!AWS,ArvanCloud,IBMCOS,IDrive,IONOS,TencentCOS,HuaweiOBS,Alibaba,ChinaMobile,GCS,Liara,Linode,MagaluCloud,Scaleway,StackPath,Storj,Synology,RackCorp,Qiniu,Petabox",
-			Examples: []fs.OptionExample{{
-				Value:    "objects-us-east-1.dream.io",
-				Help:     "Dream Objects endpoint",
-				Provider: "Dreamhost",
-			}, {
-				Value:    "syd1.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces Sydney 1",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "sfo3.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces San Francisco 3",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "fra1.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces Frankfurt 1",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "nyc3.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces New York 3",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "ams3.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces Amsterdam 3",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "sgp1.digitaloceanspaces.com",
-				Help:     "DigitalOcean Spaces Singapore 1",
-				Provider: "DigitalOcean",
-			}, {
-				Value:    "localhost:8333",
-				Help:     "SeaweedFS S3 localhost",
-				Provider: "SeaweedFS",
-			}, {
-				Value:    "s3.us-east-1.lyvecloud.seagate.com",
-				Help:     "Seagate Lyve Cloud US East 1 (Virginia)",
-				Provider: "LyveCloud",
-			}, {
-				Value:    "s3.us-west-1.lyvecloud.seagate.com",
-				Help:     "Seagate Lyve Cloud US West 1 (California)",
-				Provider: "LyveCloud",
-			}, {
-				Value:    "s3.ap-southeast-1.lyvecloud.seagate.com",
-				Help:     "Seagate Lyve Cloud AP Southeast 1 (Singapore)",
-				Provider: "LyveCloud",
-			}, {
-				Value:    "s3.wasabisys.com",
-				Help:     "Wasabi US East 1 (N. Virginia)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.us-east-2.wasabisys.com",
-				Help:     "Wasabi US East 2 (N. Virginia)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.us-central-1.wasabisys.com",
-				Help:     "Wasabi US Central 1 (Texas)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.us-west-1.wasabisys.com",
-				Help:     "Wasabi US West 1 (Oregon)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.ca-central-1.wasabisys.com",
-				Help:     "Wasabi CA Central 1 (Toronto)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.eu-central-1.wasabisys.com",
-				Help:     "Wasabi EU Central 1 (Amsterdam)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.eu-central-2.wasabisys.com",
-				Help:     "Wasabi EU Central 2 (Frankfurt)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.eu-west-1.wasabisys.com",
-				Help:     "Wasabi EU West 1 (London)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.eu-west-2.wasabisys.com",
-				Help:     "Wasabi EU West 2 (Paris)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.ap-northeast-1.wasabisys.com",
-				Help:     "Wasabi AP Northeast 1 (Tokyo) endpoint",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.ap-northeast-2.wasabisys.com",
-				Help:     "Wasabi AP Northeast 2 (Osaka) endpoint",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.ap-southeast-1.wasabisys.com",
-				Help:     "Wasabi AP Southeast 1 (Singapore)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "s3.ap-southeast-2.wasabisys.com",
-				Help:     "Wasabi AP Southeast 2 (Sydney)",
-				Provider: "Wasabi",
-			}, {
-				Value:    "storage.iran.liara.space",
-				Help:     "Liara Iran endpoint",
-				Provider: "Liara",
-			}, {
-				Value:    "s3.ir-thr-at1.arvanstorage.ir",
-				Help:     "ArvanCloud Tehran Iran (Simin) endpoint",
-				Provider: "ArvanCloud",
-			}, {
-				Value:    "s3.ir-tbz-sh1.arvanstorage.ir",
-				Help:     "ArvanCloud Tabriz Iran (Shahriar) endpoint",
-				Provider: "ArvanCloud",
-			}, {
-				Value:    "br-se1.magaluobjects.com",
-				Help:     "Magalu BR Southeast 1 endpoint",
-				Provider: "Magalu",
-			}, {
-				Value:    "br-ne1.magaluobjects.com",
-				Help:     "Magalu BR Northeast 1 endpoint",
-				Provider: "Magalu",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must be set to match the Region.\n\nUsed when creating buckets only.",
-			Provider: "AWS",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Empty for US Region, Northern Virginia, or Pacific Northwest",
-			}, {
-				Value: "us-east-2",
-				Help:  "US East (Ohio) Region",
-			}, {
-				Value: "us-west-1",
-				Help:  "US West (Northern California) Region",
-			}, {
-				Value: "us-west-2",
-				Help:  "US West (Oregon) Region",
-			}, {
-				Value: "ca-central-1",
-				Help:  "Canada (Central) Region",
-			}, {
-				Value: "eu-west-1",
-				Help:  "EU (Ireland) Region",
-			}, {
-				Value: "eu-west-2",
-				Help:  "EU (London) Region",
-			}, {
-				Value: "eu-west-3",
-				Help:  "EU (Paris) Region",
-			}, {
-				Value: "eu-north-1",
-				Help:  "EU (Stockholm) Region",
-			}, {
-				Value: "eu-south-1",
-				Help:  "EU (Milan) Region",
-			}, {
-				Value: "EU",
-				Help:  "EU Region",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "Asia Pacific (Singapore) Region",
-			}, {
-				Value: "ap-southeast-2",
-				Help:  "Asia Pacific (Sydney) Region",
-			}, {
-				Value: "ap-northeast-1",
-				Help:  "Asia Pacific (Tokyo) Region",
-			}, {
-				Value: "ap-northeast-2",
-				Help:  "Asia Pacific (Seoul) Region",
-			}, {
-				Value: "ap-northeast-3",
-				Help:  "Asia Pacific (Osaka-Local) Region",
-			}, {
-				Value: "ap-south-1",
-				Help:  "Asia Pacific (Mumbai) Region",
-			}, {
-				Value: "ap-east-1",
-				Help:  "Asia Pacific (Hong Kong) Region",
-			}, {
-				Value: "sa-east-1",
-				Help:  "South America (Sao Paulo) Region",
-			}, {
-				Value: "il-central-1",
-				Help:  "Israel (Tel Aviv) Region",
-			}, {
-				Value: "me-south-1",
-				Help:  "Middle East (Bahrain) Region",
-			}, {
-				Value: "af-south-1",
-				Help:  "Africa (Cape Town) Region",
-			}, {
-				Value: "cn-north-1",
-				Help:  "China (Beijing) Region",
-			}, {
-				Value: "cn-northwest-1",
-				Help:  "China (Ningxia) Region",
-			}, {
-				Value: "us-gov-east-1",
-				Help:  "AWS GovCloud (US-East) Region",
-			}, {
-				Value: "us-gov-west-1",
-				Help:  "AWS GovCloud (US) Region",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must match endpoint.\n\nUsed when creating buckets only.",
-			Provider: "ChinaMobile",
-			Examples: []fs.OptionExample{{
-				Value: "wuxi1",
-				Help:  "East China (Suzhou)",
-			}, {
-				Value: "jinan1",
-				Help:  "East China (Jinan)",
-			}, {
-				Value: "ningbo1",
-				Help:  "East China (Hangzhou)",
-			}, {
-				Value: "shanghai1",
-				Help:  "East China (Shanghai-1)",
-			}, {
-				Value: "zhengzhou1",
-				Help:  "Central China (Zhengzhou)",
-			}, {
-				Value: "hunan1",
-				Help:  "Central China (Changsha-1)",
-			}, {
-				Value: "zhuzhou1",
-				Help:  "Central China (Changsha-2)",
-			}, {
-				Value: "guangzhou1",
-				Help:  "South China (Guangzhou-2)",
-			}, {
-				Value: "dongguan1",
-				Help:  "South China (Guangzhou-3)",
-			}, {
-				Value: "beijing1",
-				Help:  "North China (Beijing-1)",
-			}, {
-				Value: "beijing2",
-				Help:  "North China (Beijing-2)",
-			}, {
-				Value: "beijing4",
-				Help:  "North China (Beijing-3)",
-			}, {
-				Value: "huhehaote1",
-				Help:  "North China (Huhehaote)",
-			}, {
-				Value: "chengdu1",
-				Help:  "Southwest China (Chengdu)",
-			}, {
-				Value: "chongqing1",
-				Help:  "Southwest China (Chongqing)",
-			}, {
-				Value: "guiyang1",
-				Help:  "Southwest China (Guiyang)",
-			}, {
-				Value: "xian1",
-				Help:  "Nouthwest China (Xian)",
-			}, {
-				Value: "yunnan",
-				Help:  "Yunnan China (Kunming)",
-			}, {
-				Value: "yunnan2",
-				Help:  "Yunnan China (Kunming-2)",
-			}, {
-				Value: "tianjin1",
-				Help:  "Tianjin China (Tianjin)",
-			}, {
-				Value: "jilin1",
-				Help:  "Jilin China (Changchun)",
-			}, {
-				Value: "hubei1",
-				Help:  "Hubei China (Xiangyan)",
-			}, {
-				Value: "jiangxi1",
-				Help:  "Jiangxi China (Nanchang)",
-			}, {
-				Value: "gansu1",
-				Help:  "Gansu China (Lanzhou)",
-			}, {
-				Value: "shanxi1",
-				Help:  "Shanxi China (Taiyuan)",
-			}, {
-				Value: "liaoning1",
-				Help:  "Liaoning China (Shenyang)",
-			}, {
-				Value: "hebei1",
-				Help:  "Hebei China (Shijiazhuang)",
-			}, {
-				Value: "fujian1",
-				Help:  "Fujian China (Xiamen)",
-			}, {
-				Value: "guangxi1",
-				Help:  "Guangxi China (Nanning)",
-			}, {
-				Value: "anhui1",
-				Help:  "Anhui China (Huainan)",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must match endpoint.\n\nUsed when creating buckets only.",
-			Provider: "ArvanCloud",
-			Examples: []fs.OptionExample{{
-				Value: "ir-thr-at1",
-				Help:  "Tehran Iran (Simin)",
-			}, {
-				Value: "ir-tbz-sh1",
-				Help:  "Tabriz Iran (Shahriar)",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must match endpoint when using IBM Cloud Public.\n\nFor on-prem COS, do not make a selection from this list, hit enter.",
-			Provider: "IBMCOS",
-			Examples: []fs.OptionExample{{
-				Value: "us-standard",
-				Help:  "US Cross Region Standard",
-			}, {
-				Value: "us-vault",
-				Help:  "US Cross Region Vault",
-			}, {
-				Value: "us-cold",
-				Help:  "US Cross Region Cold",
-			}, {
-				Value: "us-flex",
-				Help:  "US Cross Region Flex",
-			}, {
-				Value: "us-east-standard",
-				Help:  "US East Region Standard",
-			}, {
-				Value: "us-east-vault",
-				Help:  "US East Region Vault",
-			}, {
-				Value: "us-east-cold",
-				Help:  "US East Region Cold",
-			}, {
-				Value: "us-east-flex",
-				Help:  "US East Region Flex",
-			}, {
-				Value: "us-south-standard",
-				Help:  "US South Region Standard",
-			}, {
-				Value: "us-south-vault",
-				Help:  "US South Region Vault",
-			}, {
-				Value: "us-south-cold",
-				Help:  "US South Region Cold",
-			}, {
-				Value: "us-south-flex",
-				Help:  "US South Region Flex",
-			}, {
-				Value: "eu-standard",
-				Help:  "EU Cross Region Standard",
-			}, {
-				Value: "eu-vault",
-				Help:  "EU Cross Region Vault",
-			}, {
-				Value: "eu-cold",
-				Help:  "EU Cross Region Cold",
-			}, {
-				Value: "eu-flex",
-				Help:  "EU Cross Region Flex",
-			}, {
-				Value: "eu-gb-standard",
-				Help:  "Great Britain Standard",
-			}, {
-				Value: "eu-gb-vault",
-				Help:  "Great Britain Vault",
-			}, {
-				Value: "eu-gb-cold",
-				Help:  "Great Britain Cold",
-			}, {
-				Value: "eu-gb-flex",
-				Help:  "Great Britain Flex",
-			}, {
-				Value: "ap-standard",
-				Help:  "APAC Standard",
-			}, {
-				Value: "ap-vault",
-				Help:  "APAC Vault",
-			}, {
-				Value: "ap-cold",
-				Help:  "APAC Cold",
-			}, {
-				Value: "ap-flex",
-				Help:  "APAC Flex",
-			}, {
-				Value: "mel01-standard",
-				Help:  "Melbourne Standard",
-			}, {
-				Value: "mel01-vault",
-				Help:  "Melbourne Vault",
-			}, {
-				Value: "mel01-cold",
-				Help:  "Melbourne Cold",
-			}, {
-				Value: "mel01-flex",
-				Help:  "Melbourne Flex",
-			}, {
-				Value: "tor01-standard",
-				Help:  "Toronto Standard",
-			}, {
-				Value: "tor01-vault",
-				Help:  "Toronto Vault",
-			}, {
-				Value: "tor01-cold",
-				Help:  "Toronto Cold",
-			}, {
-				Value: "tor01-flex",
-				Help:  "Toronto Flex",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - the location where your bucket will be located and your data stored.\n",
-			Provider: "RackCorp",
-			Examples: []fs.OptionExample{{
-				Value: "global",
-				Help:  "Global CDN Region",
-			}, {
-				Value: "au",
-				Help:  "Australia (All locations)",
-			}, {
-				Value: "au-nsw",
-				Help:  "NSW (Australia) Region",
-			}, {
-				Value: "au-qld",
-				Help:  "QLD (Australia) Region",
-			}, {
-				Value: "au-vic",
-				Help:  "VIC (Australia) Region",
-			}, {
-				Value: "au-wa",
-				Help:  "Perth (Australia) Region",
-			}, {
-				Value: "ph",
-				Help:  "Manila (Philippines) Region",
-			}, {
-				Value: "th",
-				Help:  "Bangkok (Thailand) Region",
-			}, {
-				Value: "hk",
-				Help:  "HK (Hong Kong) Region",
-			}, {
-				Value: "mn",
-				Help:  "Ulaanbaatar (Mongolia) Region",
-			}, {
-				Value: "kg",
-				Help:  "Bishkek (Kyrgyzstan) Region",
-			}, {
-				Value: "id",
-				Help:  "Jakarta (Indonesia) Region",
-			}, {
-				Value: "jp",
-				Help:  "Tokyo (Japan) Region",
-			}, {
-				Value: "sg",
-				Help:  "SG (Singapore) Region",
-			}, {
-				Value: "de",
-				Help:  "Frankfurt (Germany) Region",
-			}, {
-				Value: "us",
-				Help:  "USA (AnyCast) Region",
-			}, {
-				Value: "us-east-1",
-				Help:  "New York (USA) Region",
-			}, {
-				Value: "us-west-1",
-				Help:  "Freemont (USA) Region",
-			}, {
-				Value: "nz",
-				Help:  "Auckland (New Zealand) Region",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must be set to match the Region.\n\nUsed when creating buckets only.",
-			Provider: "Qiniu",
-			Examples: []fs.OptionExample{{
-				Value: "cn-east-1",
-				Help:  "East China Region 1",
-			}, {
-				Value: "cn-east-2",
-				Help:  "East China Region 2",
-			}, {
-				Value: "cn-north-1",
-				Help:  "North China Region 1",
-			}, {
-				Value: "cn-south-1",
-				Help:  "South China Region 1",
-			}, {
-				Value: "us-north-1",
-				Help:  "North America Region 1",
-			}, {
-				Value: "ap-southeast-1",
-				Help:  "Southeast Asia Region 1",
-			}, {
-				Value: "ap-northeast-1",
-				Help:  "Northeast Asia Region 1",
-			}},
-		}, {
-			Name:     "location_constraint",
-			Help:     "Location constraint - must be set to match the Region.\n\nLeave blank if not sure. Used when creating buckets only.",
-			Provider: "!AWS,Alibaba,ArvanCloud,HuaweiOBS,ChinaMobile,Cloudflare,IBMCOS,IDrive,IONOS,Leviia,Liara,Linode,Magalu,Qiniu,RackCorp,Scaleway,StackPath,Storj,TencentCOS,Petabox",
+			Name: "location_constraint",
+			Help: "Location constraint - must be set to match the Region.\n\nLeave blank if not sure. Used when creating buckets only.",
 		}, {
 			Name: "acl",
 			Help: `Canned ACL used when creating buckets and storing or copying objects.
@@ -1813,52 +126,6 @@ doesn't copy the ACL from the source but rather writes a fresh one.
 If the acl is an empty string then no X-Amz-Acl: header is added and
 the default (private) will be used.
 `,
-			Provider: "!Storj,Synology,Cloudflare",
-			Examples: []fs.OptionExample{{
-				Value:    "default",
-				Help:     "Owner gets Full_CONTROL.\nNo one else has access rights (default).",
-				Provider: "TencentCOS",
-			}, {
-				Value:    "private",
-				Help:     "Owner gets FULL_CONTROL.\nNo one else has access rights (default).",
-				Provider: "!IBMCOS,TencentCOS",
-			}, {
-				Value:    "public-read",
-				Help:     "Owner gets FULL_CONTROL.\nThe AllUsers group gets READ access.",
-				Provider: "!IBMCOS",
-			}, {
-				Value:    "public-read-write",
-				Help:     "Owner gets FULL_CONTROL.\nThe AllUsers group gets READ and WRITE access.\nGranting this on a bucket is generally not recommended.",
-				Provider: "!IBMCOS",
-			}, {
-				Value:    "authenticated-read",
-				Help:     "Owner gets FULL_CONTROL.\nThe AuthenticatedUsers group gets READ access.",
-				Provider: "!IBMCOS",
-			}, {
-				Value:    "bucket-owner-read",
-				Help:     "Object owner gets FULL_CONTROL.\nBucket owner gets READ access.\nIf you specify this canned ACL when creating a bucket, Amazon S3 ignores it.",
-				Provider: "!IBMCOS,ChinaMobile",
-			}, {
-				Value:    "bucket-owner-full-control",
-				Help:     "Both the object owner and the bucket owner get FULL_CONTROL over the object.\nIf you specify this canned ACL when creating a bucket, Amazon S3 ignores it.",
-				Provider: "!IBMCOS,ChinaMobile",
-			}, {
-				Value:    "private",
-				Help:     "Owner gets FULL_CONTROL.\nNo one else has access rights (default).\nThis acl is available on IBM Cloud (Infra), IBM Cloud (Storage), On-Premise COS.",
-				Provider: "IBMCOS",
-			}, {
-				Value:    "public-read",
-				Help:     "Owner gets FULL_CONTROL.\nThe AllUsers group gets READ access.\nThis acl is available on IBM Cloud (Infra), IBM Cloud (Storage), On-Premise IBM COS.",
-				Provider: "IBMCOS",
-			}, {
-				Value:    "public-read-write",
-				Help:     "Owner gets FULL_CONTROL.\nThe AllUsers group gets READ and WRITE access.\nThis acl is available on IBM Cloud (Infra), On-Premise IBM COS.",
-				Provider: "IBMCOS",
-			}, {
-				Value:    "authenticated-read",
-				Help:     "Owner gets FULL_CONTROL.\nThe AuthenticatedUsers group gets READ access.\nNot supported on Buckets.\nThis acl is available on IBM Cloud (Infra) and On-Premise IBM COS.",
-				Provider: "IBMCOS",
-			}},
 		}, {
 			Name: "bucket_acl",
 			Help: `Canned ACL used when creating buckets.
@@ -1888,28 +155,14 @@ header is added and the default (private) will be used.
 		}, {
 			Name:     "requester_pays",
 			Help:     "Enables requester pays option when interacting with S3 bucket.",
-			Provider: "AWS",
 			Default:  false,
 			Advanced: true,
 		}, {
-			Name:     "server_side_encryption",
-			Help:     "The server-side encryption algorithm used when storing this object in S3.",
-			Provider: "AWS,Ceph,ChinaMobile,Minio",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "None",
-			}, {
-				Value: "AES256",
-				Help:  "AES256",
-			}, {
-				Value:    "aws:kms",
-				Help:     "aws:kms",
-				Provider: "!ChinaMobile",
-			}},
+			Name: "server_side_encryption",
+			Help: "The server-side encryption algorithm used when storing this object in S3.",
 		}, {
 			Name:     "sse_customer_algorithm",
 			Help:     "If using SSE-C, the server-side encryption algorithm used when storing this object in S3.",
-			Provider: "AWS,Ceph,ChinaMobile,Minio",
 			Advanced: true,
 			Examples: []fs.OptionExample{{
 				Value: "",
@@ -1919,9 +172,8 @@ header is added and the default (private) will be used.
 				Help:  "AES256",
 			}},
 		}, {
-			Name:     "sse_kms_key_id",
-			Help:     "If using KMS ID you must provide the ARN of Key.",
-			Provider: "AWS,Ceph,Minio",
+			Name: "sse_kms_key_id",
+			Help: "If using KMS ID you must provide the ARN of Key.",
 			Examples: []fs.OptionExample{{
 				Value: "",
 				Help:  "None",
@@ -1935,7 +187,6 @@ header is added and the default (private) will be used.
 			Help: `To use SSE-C you may provide the secret encryption key used to encrypt/decrypt your data.
 
 Alternatively you can provide --sse-customer-key-base64.`,
-			Provider: "AWS,Ceph,ChinaMobile,Minio",
 			Advanced: true,
 			Examples: []fs.OptionExample{{
 				Value: "",
@@ -1947,7 +198,6 @@ Alternatively you can provide --sse-customer-key-base64.`,
 			Help: `If using SSE-C you must provide the secret encryption key encoded in base64 format to encrypt/decrypt your data.
 
 Alternatively you can provide --sse-customer-key.`,
-			Provider: "AWS,Ceph,ChinaMobile,Minio",
 			Advanced: true,
 			Examples: []fs.OptionExample{{
 				Value: "",
@@ -1960,7 +210,6 @@ Alternatively you can provide --sse-customer-key.`,
 
 If you leave it blank, this is calculated automatically from the sse_customer_key provided.
 `,
-			Provider: "AWS,Ceph,ChinaMobile,Minio",
 			Advanced: true,
 			Examples: []fs.OptionExample{{
 				Value: "",
@@ -1968,154 +217,8 @@ If you leave it blank, this is calculated automatically from the sse_customer_ke
 			}},
 			Sensitive: true,
 		}, {
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in S3.",
-			Provider: "AWS",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Default",
-			}, {
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}, {
-				Value: "REDUCED_REDUNDANCY",
-				Help:  "Reduced redundancy storage class",
-			}, {
-				Value: "STANDARD_IA",
-				Help:  "Standard Infrequent Access storage class",
-			}, {
-				Value: "ONEZONE_IA",
-				Help:  "One Zone Infrequent Access storage class",
-			}, {
-				Value: "GLACIER",
-				Help:  "Glacier storage class",
-			}, {
-				Value: "DEEP_ARCHIVE",
-				Help:  "Glacier Deep Archive storage class",
-			}, {
-				Value: "INTELLIGENT_TIERING",
-				Help:  "Intelligent-Tiering storage class",
-			}, {
-				Value: "GLACIER_IR",
-				Help:  "Glacier Instant Retrieval storage class",
-			}},
-		}, {
-			// Mapping from here: https://www.alibabacloud.com/help/doc-detail/64919.htm
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in OSS.",
-			Provider: "Alibaba",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Default",
-			}, {
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}, {
-				Value: "GLACIER",
-				Help:  "Archive storage mode",
-			}, {
-				Value: "STANDARD_IA",
-				Help:  "Infrequent access storage mode",
-			}},
-		}, {
-			// Mapping from here: https://ecloud.10086.cn/op-help-center/doc/article/24495
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in ChinaMobile.",
-			Provider: "ChinaMobile",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Default",
-			}, {
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}, {
-				Value: "GLACIER",
-				Help:  "Archive storage mode",
-			}, {
-				Value: "STANDARD_IA",
-				Help:  "Infrequent access storage mode",
-			}},
-		}, {
-			// Mapping from here: https://liara.ir/landing/object-storage
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in Liara",
-			Provider: "Liara",
-			Examples: []fs.OptionExample{{
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}},
-		}, {
-			// Mapping from here: https://www.arvancloud.ir/en/products/cloud-storage
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in ArvanCloud.",
-			Provider: "ArvanCloud",
-			Examples: []fs.OptionExample{{
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}},
-		}, {
-			// Mapping from here: #todo
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in Magalu.",
-			Provider: "Magalu",
-			Examples: []fs.OptionExample{{
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}},
-		}, {
-			// Mapping from here: https://intl.cloud.tencent.com/document/product/436/30925
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in Tencent COS.",
-			Provider: "TencentCOS",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Default",
-			}, {
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}, {
-				Value: "ARCHIVE",
-				Help:  "Archive storage mode",
-			}, {
-				Value: "STANDARD_IA",
-				Help:  "Infrequent access storage mode",
-			}},
-		}, {
-			// Mapping from here: https://www.scaleway.com/en/docs/storage/object/quickstart/
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in S3.",
-			Provider: "Scaleway",
-			Examples: []fs.OptionExample{{
-				Value: "",
-				Help:  "Default.",
-			}, {
-				Value: "STANDARD",
-				Help:  "The Standard class for any upload.\nSuitable for on-demand content like streaming or CDN.\nAvailable in all regions.",
-			}, {
-				Value: "GLACIER",
-				Help:  "Archived storage.\nPrices are lower, but it needs to be restored first to be accessed.\nAvailable in FR-PAR and NL-AMS regions.",
-			}, {
-				Value: "ONEZONE_IA",
-				Help:  "One Zone - Infrequent Access.\nA good choice for storing secondary backup copies or easily re-creatable data.\nAvailable in the FR-PAR region only.",
-			}},
-		}, {
-			// Mapping from here: https://developer.qiniu.com/kodo/5906/storage-type
-			Name:     "storage_class",
-			Help:     "The storage class to use when storing new objects in Qiniu.",
-			Provider: "Qiniu",
-			Examples: []fs.OptionExample{{
-				Value: "STANDARD",
-				Help:  "Standard storage class",
-			}, {
-				Value: "LINE",
-				Help:  "Infrequent access storage mode",
-			}, {
-				Value: "GLACIER",
-				Help:  "Archive storage mode",
-			}, {
-				Value: "DEEP_ARCHIVE",
-				Help:  "Deep archive storage mode",
-			}},
+			Name: "storage_class",
+			Help: "The storage class to use when storing new objects in S3.",
 		}, {
 			Name: "upload_cutoff",
 			Help: `Cutoff for switching to chunked upload.
@@ -2269,16 +372,19 @@ See [AWS Docs on Dualstack Endpoints](https://docs.aws.amazon.com/AmazonS3/lates
 			Default:  false,
 			Advanced: true,
 		}, {
-			Name:     "use_accelerate_endpoint",
-			Provider: "AWS",
+			Name: "use_accelerate_endpoint",
 			Help: `If true use the AWS S3 accelerated endpoint.
 
 See: [AWS S3 Transfer acceleration](https://docs.aws.amazon.com/AmazonS3/latest/dev/transfer-acceleration-examples.html)`,
 			Default:  false,
 			Advanced: true,
 		}, {
-			Name:     "leave_parts_on_error",
-			Provider: "AWS",
+			Name:     "use_arn_region",
+			Help:     `If true, enables arn region support for the service.`,
+			Default:  false,
+			Advanced: true,
+		}, {
+			Name: "leave_parts_on_error",
 			Help: `If true avoid calling abort upload on a failure, leaving all successfully uploaded parts on S3 for manual recovery.
 
 It should be set to true for resuming uploads across different sessions.
@@ -2483,7 +589,7 @@ The parameter should be a date, "2006-01-02", datetime "2006-01-02
 Note that when using this no file write operations are permitted,
 so you can't upload files or delete them.
 
-See [the time option docs](/docs/#time-option) for valid formats.
+See [the time option docs](/docs/#time-options) for valid formats.
 `,
 			Default:  fs.Time{},
 			Advanced: true,
@@ -2564,7 +670,6 @@ In this case, you might want to try disabling this option.
 		}, {
 			Name:     "sts_endpoint",
 			Help:     "Endpoint for STS (deprecated).\n\nLeave blank if using AWS to use the default endpoint for the region.",
-			Provider: "AWS",
 			Advanced: true,
 			Hide:     fs.OptionHideBoth,
 		}, {
@@ -2607,6 +712,62 @@ knows about - please make a bug report if not.
 			Default:  fs.Tristate{},
 			Advanced: true,
 		}, {
+			Name: "use_x_id",
+			Help: `Set if rclone should add x-id URL parameters.
+
+You can change this if you want to disable the AWS SDK from
+adding x-id URL parameters.
+
+This shouldn't be necessary in normal operation.
+
+This should be automatically set correctly for all providers rclone
+knows about - please make a bug report if not.
+`,
+			Default:  fs.Tristate{},
+			Advanced: true,
+		}, {
+			Name: "sign_accept_encoding",
+			Help: `Set if rclone should include Accept-Encoding as part of the signature.
+
+You can change this if you want to stop rclone including
+Accept-Encoding as part of the signature.
+
+This shouldn't be necessary in normal operation.
+
+This should be automatically set correctly for all providers rclone
+knows about - please make a bug report if not.
+`,
+			Default:  fs.Tristate{},
+			Advanced: true,
+		}, {
+			Name: "directory_bucket",
+			Help: strings.ReplaceAll(`Set to use AWS Directory Buckets
+
+If you are using an AWS Directory Bucket then set this flag.
+
+This will ensure no |Content-Md5| headers are sent and ensure |ETag|
+headers are not interpreted as MD5 sums. |X-Amz-Meta-Md5chksum| will
+be set on all objects whether single or multipart uploaded.
+
+This also sets |no_check_bucket = true|.
+
+Note that Directory Buckets do not support:
+
+- Versioning
+- |Content-Encoding: gzip|
+
+Rclone limitations with Directory Buckets:
+
+- rclone does not support creating Directory Buckets with |rclone mkdir|
+- ... or removing them with |rclone rmdir| yet
+- Directory Buckets do not appear when doing |rclone lsf| at the top level.
+- Rclone can't remove auto created directories yet. In theory this should
+  work with |directory_markers = true| but it doesn't.
+- Directories don't seem to appear in recursive (ListR) listings.
+`, "|", "`"),
+			Default:  false,
+			Advanced: true,
+		}, {
 			Name: "sdk_log_mode",
 			Help: strings.ReplaceAll(`Set to debug the SDK
 
@@ -2627,8 +788,14 @@ use |-vv| to see the debug level logs.
 `, "|", "`"),
 			Default:  sdkLogMode(0),
 			Advanced: true,
+		}, {
+			Name: "ibm_api_key",
+			Help: "IBM API Key to be used to obtain IAM token",
+		}, {
+			Name: "ibm_resource_instance_id",
+			Help: "IBM service instance id",
 		},
-		}})
+		}}))
 }
 
 // Constants
@@ -2756,6 +923,7 @@ type Options struct {
 	ForcePathStyle        bool                 `config:"force_path_style"`
 	V2Auth                bool                 `config:"v2_auth"`
 	UseAccelerateEndpoint bool                 `config:"use_accelerate_endpoint"`
+	UseARNRegion          bool                 `config:"use_arn_region"`
 	LeavePartsOnError     bool                 `config:"leave_parts_on_error"`
 	ListChunk             int32                `config:"list_chunk"`
 	ListVersion           int                  `config:"list_version"`
@@ -2780,6 +948,11 @@ type Options struct {
 	UseMultipartUploads   fs.Tristate          `config:"use_multipart_uploads"`
 	UseUnsignedPayload    fs.Tristate          `config:"use_unsigned_payload"`
 	SDKLogMode            sdkLogMode           `config:"sdk_log_mode"`
+	DirectoryBucket       bool                 `config:"directory_bucket"`
+	IBMAPIKey             string               `config:"ibm_api_key"`
+	IBMInstanceID         string               `config:"ibm_resource_instance_id"`
+	UseXID                fs.Tristate          `config:"use_x_id"`
+	SignAcceptEncoding    fs.Tristate          `config:"sign_accept_encoding"`
 }
 
 // Fs represents a remote s3 server
@@ -2913,10 +1086,8 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 				return true, err
 			}
 		}
-		for _, e := range retryErrorCodes {
-			if httpStatusCode == e {
-				return true, err
-			}
+		if slices.Contains(retryErrorCodes, httpStatusCode) {
+			return true, err
 		}
 	}
 	// Ok, not an awserr, check for generic failure conditions
@@ -2933,6 +1104,9 @@ func parsePath(path string) (root string) {
 // relative to f.root
 func (f *Fs) split(rootRelativePath string) (bucketName, bucketPath string) {
 	bucketName, bucketPath = bucket.Split(bucket.Join(f.root, rootRelativePath))
+	if f.opt.DirectoryMarkers && strings.HasSuffix(bucketPath, "//") {
+		bucketPath = bucketPath[:len(bucketPath)-1]
+	}
 	return f.opt.Enc.FromStandardName(bucketName), f.opt.Enc.FromStandardPath(bucketPath)
 }
 
@@ -2964,41 +1138,47 @@ func getClient(ctx context.Context, opt *Options) *http.Client {
 	}
 }
 
+// Fixup the request if needed.
+//
 // Google Cloud Storage alters the Accept-Encoding header, which
-// breaks the v2 request signature
+// breaks the v2 request signature. This is set with opt.SignAcceptEncoding.
 //
 // It also doesn't like the x-id URL parameter SDKv2 puts in so we
-// remove that too.
+// remove that too. This is set with opt.UseXID.Value.
 //
 // See https://github.com/aws/aws-sdk-go-v2/issues/1816.
 // Adapted from: https://github.com/aws/aws-sdk-go-v2/issues/1816#issuecomment-1927281540
-func fixupGCS(o *s3.Options) {
+func fixupRequest(o *s3.Options, opt *Options) {
 	type ignoredHeadersKey struct{}
 	headers := []string{"Accept-Encoding"}
 
 	fixup := middleware.FinalizeMiddlewareFunc(
-		"FixupGCS",
+		"FixupRequest",
 		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (out middleware.FinalizeOutput, metadata middleware.Metadata, err error) {
 			req, ok := in.Request.(*smithyhttp.Request)
 			if !ok {
-				return out, metadata, fmt.Errorf("fixupGCS: unexpected request middleware type %T", in.Request)
+				return out, metadata, fmt.Errorf("fixupRequest: unexpected request middleware type %T", in.Request)
 			}
 
-			// Delete headers from being signed - will restore later
-			ignored := make(map[string]string, len(headers))
-			for _, h := range headers {
-				ignored[h] = req.Header.Get(h)
-				req.Header.Del(h)
+			if !opt.SignAcceptEncoding.Value {
+				// Delete headers from being signed - will restore later
+				ignored := make(map[string]string, len(headers))
+				for _, h := range headers {
+					ignored[h] = req.Header.Get(h)
+					req.Header.Del(h)
+				}
+
+				// Store ignored on context
+				ctx = middleware.WithStackValue(ctx, ignoredHeadersKey{}, ignored)
 			}
 
-			// Remove x-id because Google doesn't like them
-			if query := req.URL.Query(); query.Has("x-id") {
-				query.Del("x-id")
-				req.URL.RawQuery = query.Encode()
+			if !opt.UseXID.Value {
+				// Remove x-id
+				if query := req.URL.Query(); query.Has("x-id") {
+					query.Del("x-id")
+					req.URL.RawQuery = query.Encode()
+				}
 			}
-
-			// Store ignored on context
-			ctx = middleware.WithStackValue(ctx, ignoredHeadersKey{}, ignored)
 
 			return next.HandleFinalize(ctx, in)
 		},
@@ -3006,17 +1186,19 @@ func fixupGCS(o *s3.Options) {
 
 	// Restore headers if necessary
 	restore := middleware.FinalizeMiddlewareFunc(
-		"FixupGCSRestoreHeaders",
+		"FixupRequestRestoreHeaders",
 		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (out middleware.FinalizeOutput, metadata middleware.Metadata, err error) {
 			req, ok := in.Request.(*smithyhttp.Request)
 			if !ok {
-				return out, metadata, fmt.Errorf("fixupGCS: unexpected request middleware type %T", in.Request)
+				return out, metadata, fmt.Errorf("fixupRequest: unexpected request middleware type %T", in.Request)
 			}
 
-			// Restore ignored from ctx
-			ignored, _ := middleware.GetStackValue(ctx, ignoredHeadersKey{}).(map[string]string)
-			for k, v := range ignored {
-				req.Header.Set(k, v)
+			if !opt.SignAcceptEncoding.Value {
+				// Restore ignored from ctx
+				ignored, _ := middleware.GetStackValue(ctx, ignoredHeadersKey{}).(map[string]string)
+				for k, v := range ignored {
+					req.Header.Set(k, v)
+				}
 			}
 
 			return next.HandleFinalize(ctx, in)
@@ -3038,7 +1220,7 @@ func fixupGCS(o *s3.Options) {
 type s3logger struct{}
 
 // Logf is expected to support the standard fmt package "verbs".
-func (s3logger) Logf(classification logging.Classification, format string, v ...interface{}) {
+func (s3logger) Logf(classification logging.Classification, format string, v ...any) {
 	switch classification {
 	default:
 	case logging.Debug:
@@ -3049,12 +1231,20 @@ func (s3logger) Logf(classification logging.Classification, format string, v ...
 }
 
 // s3Connection makes a connection to s3
-func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Client *s3.Client, err error) {
+func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Client *s3.Client, provider *Provider, err error) {
 	ci := fs.GetConfig(ctx)
 	var awsConfig aws.Config
+	// Make the default static auth
+	v := aws.Credentials{
+		AccessKeyID:     opt.AccessKeyID,
+		SecretAccessKey: opt.SecretAccessKey,
+		SessionToken:    opt.SessionToken,
+	}
+	awsConfig.Credentials = &credentials.StaticCredentialsProvider{Value: v}
 
 	// Try to fill in the config from the environment if env_auth=true
-	if opt.EnvAuth {
+	if opt.EnvAuth && opt.AccessKeyID == "" && opt.SecretAccessKey == "" {
+
 		configOpts := []func(*awsconfig.LoadOptions) error{}
 		// Set the name of the profile if supplied
 		if opt.Profile != "" {
@@ -3066,33 +1256,38 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 		}
 		awsConfig, err = awsconfig.LoadDefaultConfig(ctx, configOpts...)
 		if err != nil {
-			return nil, fmt.Errorf("couldn't load configuration with env_auth=true: %w", err)
+			return nil, nil, fmt.Errorf("couldn't load configuration with env_auth=true: %w", err)
 		}
+
 	} else {
 		switch {
+		case opt.Provider == "IBMCOS" && opt.V2Auth:
+			awsConfig.Credentials = &NoOpCredentialsProvider{}
+			fs.Debugf(nil, "Using IBM IAM")
 		case opt.AccessKeyID == "" && opt.SecretAccessKey == "":
 			// if no access key/secret and iam is explicitly disabled then fall back to anon interaction
 			awsConfig.Credentials = aws.AnonymousCredentials{}
 			fs.Debugf(nil, "Using anonymous credentials - did you mean to set env_auth=true?")
 		case opt.AccessKeyID == "":
-			return nil, errors.New("access_key_id not found")
+			return nil, nil, errors.New("access_key_id not found")
 		case opt.SecretAccessKey == "":
-			return nil, errors.New("secret_access_key not found")
+			return nil, nil, errors.New("secret_access_key not found")
 		default:
-			// Make the static auth
-			v := aws.Credentials{
-				AccessKeyID:     opt.AccessKeyID,
-				SecretAccessKey: opt.SecretAccessKey,
-				SessionToken:    opt.SessionToken,
-			}
-			awsConfig.Credentials = &credentials.StaticCredentialsProvider{Value: v}
+			// static credentials are already set
 		}
 	}
 
 	if opt.Region == "" {
 		opt.Region = "us-east-1"
 	}
-	setQuirks(opt)
+
+	provider = loadProvider(opt.Provider)
+	if provider == nil {
+		fs.Logf("s3", "s3 provider %q not known - please set correctly", opt.Provider)
+		provider = loadProvider("Other")
+	}
+
+	setQuirks(opt, provider)
 	awsConfig.RetryMaxAttempts = ci.LowLevelRetries
 	awsConfig.HTTPClient = client
 
@@ -3100,6 +1295,7 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 	options = append(options, func(s3Opt *s3.Options) {
 		s3Opt.UsePathStyle = opt.ForcePathStyle
 		s3Opt.UseAccelerate = opt.UseAccelerateEndpoint
+		s3Opt.UseARNRegion = opt.UseARNRegion
 		// FIXME maybe this should be a tristate so can default to DualStackEndpointStateUnset?
 		if opt.UseDualStack {
 			s3Opt.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateEnabled
@@ -3116,7 +1312,7 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 	if opt.STSEndpoint != "" {
 		// FIXME not sure if anyone is using this
 		// Haven't figured out how to do it with the v2 SDK
-		return nil, errors.New("--s3-sts-endpoint is no longer supported with the v2 SDK - please make an issue")
+		return nil, nil, errors.New("--s3-sts-endpoint is no longer supported with the v2 SDK - please make an issue")
 	}
 	if opt.Endpoint != "" {
 		if !strings.HasPrefix(opt.Endpoint, "http") {
@@ -3129,14 +1325,21 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 
 	if opt.V2Auth || opt.Region == "other-v2-signature" {
 		fs.Debugf(nil, "Using v2 auth")
-		options = append(options, func(s3Opt *s3.Options) {
-			s3Opt.HTTPSignerV4 = &v2Signer{opt: opt}
-		})
+		if opt.Provider == "IBMCOS" && opt.IBMAPIKey != "" && opt.IBMInstanceID != "" {
+			options = append(options, func(s3Opt *s3.Options) {
+				s3Opt.HTTPSignerV4 = &IbmIamSigner{APIKey: opt.IBMAPIKey, InstanceID: opt.IBMInstanceID}
+			})
+		} else {
+			options = append(options, func(s3Opt *s3.Options) {
+				s3Opt.HTTPSignerV4 = &v2Signer{opt: opt}
+			})
+		}
 	}
 
-	if opt.Provider == "GCS" {
+	// Fixup the request if needed
+	if !opt.UseXID.Value || !opt.SignAcceptEncoding.Value {
 		options = append(options, func(o *s3.Options) {
-			fixupGCS(o)
+			fixupRequest(o, opt)
 		})
 	}
 
@@ -3147,7 +1350,7 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 	}
 
 	c := s3.NewFromConfig(awsConfig, options...)
-	return c, nil
+	return c, provider, nil
 }
 
 func checkUploadChunkSize(cs fs.SizeSuffix) error {
@@ -3240,227 +1443,69 @@ func setEndpointValueForIDriveE2(m configmap.Mapper) (err error) {
 // Run the integration tests to check you have the quirks correct.
 //
 //	go test -v -remote NewS3Provider:
-func setQuirks(opt *Options) {
-	var (
-		listObjectsV2         = true // Always use ListObjectsV2 instead of ListObjects
-		virtualHostStyle      = true // Use bucket.provider.com instead of putting the bucket in the URL
-		urlEncodeListings     = true // URL encode the listings to help with control characters
-		useMultipartEtag      = true // Set if Etags for multpart uploads are compatible with AWS
-		useAcceptEncodingGzip = true // Set Accept-Encoding: gzip
-		mightGzip             = true // assume all providers might use content encoding gzip until proven otherwise
-		useAlreadyExists      = true // Set if provider returns AlreadyOwnedByYou or no error if you try to remake your own bucket
-		useMultipartUploads   = true // Set if provider supports multipart uploads
-		useUnsignedPayload    = true // Do we need to use unsigned payloads to avoid seeking in PutObject
-	)
-	switch opt.Provider {
-	case "AWS":
-		// No quirks
-		mightGzip = false          // Never auto gzips objects
-		useUnsignedPayload = false // AWS has trailer support which means it adds checksums in the trailer without seeking
-	case "Alibaba":
-		useMultipartEtag = false // Alibaba seems to calculate multipart Etags differently from AWS
-		useAlreadyExists = true  // returns 200 OK
-	case "HuaweiOBS":
-		// Huawei OBS PFS is not support listObjectV2, and if turn on the urlEncodeListing, marker will not work and keep list same page forever.
-		urlEncodeListings = false
-		listObjectsV2 = false
-		useAlreadyExists = false // untested
-	case "Ceph":
-		listObjectsV2 = false
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useAlreadyExists = true
-	case "ChinaMobile":
-		listObjectsV2 = false
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "Cloudflare":
-		virtualHostStyle = false
-		useMultipartEtag = false // currently multipart Etags are random
-	case "ArvanCloud":
-		listObjectsV2 = false
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "DigitalOcean":
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "Dreamhost":
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "IBMCOS":
-		listObjectsV2 = false // untested
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useMultipartEtag = false // untested
-		useAlreadyExists = false // returns BucketAlreadyExists
-	case "IDrive":
-		virtualHostStyle = false
-		useAlreadyExists = false // untested
-	case "IONOS":
-		// listObjectsV2 supported - https://api.ionos.com/docs/s3/#Basic-Operations-get-Bucket-list-type-2
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "Petabox":
-		useAlreadyExists = false // untested
-	case "Liara":
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useMultipartEtag = false
-		useAlreadyExists = false // untested
-	case "Linode":
-		useAlreadyExists = true // returns 200 OK
-	case "LyveCloud":
-		useMultipartEtag = false // LyveCloud seems to calculate multipart Etags differently from AWS
-		useAlreadyExists = false // untested
-	case "Magalu":
-		listObjectsV2 = false
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useMultipartEtag = false
-		useAlreadyExists = false
-	case "Minio":
-		virtualHostStyle = false
-	case "Netease":
-		listObjectsV2 = false // untested
-		urlEncodeListings = false
-		useMultipartEtag = false // untested
-		useAlreadyExists = false // untested
-	case "RackCorp":
-		// No quirks
-		useMultipartEtag = false // untested
-		useAlreadyExists = false // untested
-	case "Rclone":
-		listObjectsV2 = true
-		urlEncodeListings = true
-		virtualHostStyle = false
-		useMultipartEtag = false
-		useAlreadyExists = false
-		// useMultipartUploads = false - set this manually
-		// rclone serve doesn't support multi-part server side copy:
-		// See: https://github.com/rclone/rclone/issues/7454
-		// So make cutoff very large which it does support
-		opt.CopyCutoff = math.MaxInt64
-	case "Scaleway":
-		// Scaleway can only have 1000 parts in an upload
-		if opt.MaxUploadParts > 1000 {
-			opt.MaxUploadParts = 1000
+func setQuirks(opt *Options, provider *Provider) {
+	// Set tristate to the ultimate default value or the override
+	// in provider.Quirks. Pass in the ultimate default as value.
+	set := func(tristate *fs.Tristate, value bool, override *bool) {
+		if override != nil {
+			value = *override
 		}
-		urlEncodeListings = true
-		useAlreadyExists = true
-	case "SeaweedFS":
-		listObjectsV2 = false // untested
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useMultipartEtag = false // untested
-		useAlreadyExists = false // untested
-	case "StackPath":
-		listObjectsV2 = false // untested
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useAlreadyExists = false // untested
-	case "Storj":
-		// Force chunk size to >= 64 MiB
-		if opt.ChunkSize < 64*fs.Mebi {
-			opt.ChunkSize = 64 * fs.Mebi
+		if !tristate.Valid {
+			tristate.Valid = true
+			tristate.Value = value
 		}
-		useAlreadyExists = false // returns BucketAlreadyExists
-	case "Synology":
-		useMultipartEtag = false
-		useAlreadyExists = false // untested
-	case "TencentCOS":
-		listObjectsV2 = false    // untested
-		useMultipartEtag = false // untested
-		useAlreadyExists = false // untested
-	case "Wasabi":
-		useAlreadyExists = true // returns 200 OK
-	case "Leviia":
-		useAlreadyExists = false // untested
-	case "Qiniu":
-		useMultipartEtag = false
-		urlEncodeListings = false
-		virtualHostStyle = false
-		useAlreadyExists = false // untested
-	case "GCS":
-		// Google break request Signature by mutating accept-encoding HTTP header
-		// https://github.com/rclone/rclone/issues/6670
-		useAcceptEncodingGzip = false
-		useAlreadyExists = true // returns BucketNameUnavailable instead of BucketAlreadyExists but good enough!
-		// GCS S3 doesn't support multi-part server side copy:
-		// See: https://issuetracker.google.com/issues/323465186
-		// So make cutoff very large which it does seem to support
-		opt.CopyCutoff = math.MaxInt64
-	default: //nolint:gocritic // Don't include gocritic when running golangci-lint to avoid defaultCaseOrder: consider to make `default` case as first or as last case
-		fs.Logf("s3", "s3 provider %q not known - please set correctly", opt.Provider)
-		fallthrough
-	case "Other":
-		listObjectsV2 = false
-		virtualHostStyle = false
-		urlEncodeListings = false
-		useMultipartEtag = false
-		useAlreadyExists = false
 	}
 
-	// Path Style vs Virtual Host style
+	// Set Path Style vs Virtual Host style
+	var virtualHostStyle = true // Default use bucket.provider.com instead of putting the bucket in the URL
+	if provider.Quirks.ForcePathStyle != nil {
+		// "don't force path style" so inverted
+		virtualHostStyle = !*provider.Quirks.ForcePathStyle
+	}
 	if virtualHostStyle || opt.UseAccelerateEndpoint {
 		opt.ForcePathStyle = false
 	}
 
-	// Set to see if we need to URL encode listings
-	if !opt.ListURLEncode.Valid {
-		opt.ListURLEncode.Valid = true
-		opt.ListURLEncode.Value = urlEncodeListings
-	}
-
 	// Set the correct list version if not manually set
 	if opt.ListVersion == 0 {
-		if listObjectsV2 {
-			opt.ListVersion = 2
+		if provider.Quirks.ListVersion != nil {
+			opt.ListVersion = *provider.Quirks.ListVersion
 		} else {
-			opt.ListVersion = 1
+			opt.ListVersion = 2
 		}
 	}
 
-	// Set the correct use multipart Etag for error checking if not manually set
-	if !opt.UseMultipartEtag.Valid {
-		opt.UseMultipartEtag.Valid = true
-		opt.UseMultipartEtag.Value = useMultipartEtag
+	// Set the copy cutoff if not manually set
+	// Check equality with strings as config values get round tripped via strings
+	if opt.CopyCutoff.String() == fs.SizeSuffix(maxSizeForCopy).String() {
+		if provider.Quirks.CopyCutoff != nil {
+			opt.CopyCutoff = fs.SizeSuffix(*provider.Quirks.CopyCutoff)
+		}
 	}
 
-	// set MightGzip if not manually set
-	if !opt.MightGzip.Valid {
-		opt.MightGzip.Valid = true
-		opt.MightGzip.Value = mightGzip
+	// Clip the max upload parts to the quirk
+	if provider.Quirks.MaxUploadParts != nil {
+		opt.MaxUploadParts = min(opt.MaxUploadParts, *provider.Quirks.MaxUploadParts)
 	}
 
-	// set UseAcceptEncodingGzip if not manually set
-	if !opt.UseAcceptEncodingGzip.Valid {
-		opt.UseAcceptEncodingGzip.Valid = true
-		opt.UseAcceptEncodingGzip.Value = useAcceptEncodingGzip
+	// Clip the chunk size to the quirk
+	if provider.Quirks.MinChunkSize != nil {
+		opt.ChunkSize = max(opt.ChunkSize, fs.SizeSuffix(*provider.Quirks.MinChunkSize))
 	}
 
-	// Has the provider got AlreadyOwnedByYou error?
-	if !opt.UseAlreadyExists.Valid {
-		opt.UseAlreadyExists.Valid = true
-		opt.UseAlreadyExists.Value = useAlreadyExists
-	}
-
-	// Set the correct use multipart uploads if not manually set
-	if !opt.UseMultipartUploads.Valid {
-		opt.UseMultipartUploads.Valid = true
-		opt.UseMultipartUploads.Value = useMultipartUploads
-	}
+	// Set new style Tristate quirks
+	set(&opt.ListURLEncode, true, provider.Quirks.ListURLEncode)
+	set(&opt.UseMultipartEtag, true, provider.Quirks.UseMultipartEtag)
+	set(&opt.UseAcceptEncodingGzip, true, provider.Quirks.UseAcceptEncodingGzip)
+	set(&opt.MightGzip, true, provider.Quirks.MightGzip)
+	set(&opt.UseAlreadyExists, true, provider.Quirks.UseAlreadyExists)
+	set(&opt.UseMultipartUploads, true, provider.Quirks.UseMultipartUploads)
 	if !opt.UseMultipartUploads.Value {
 		opt.UploadCutoff = math.MaxInt64
 	}
-
-	// Set the correct use multipart uploads if not manually set
-	if !opt.UseUnsignedPayload.Valid {
-		opt.UseUnsignedPayload.Valid = true
-		opt.UseUnsignedPayload.Value = useUnsignedPayload
-	}
+	set(&opt.UseUnsignedPayload, true, provider.Quirks.UseUnsignedPayload)
+	set(&opt.UseXID, true, provider.Quirks.UseXID)
+	set(&opt.SignAcceptEncoding, true, provider.Quirks.SignAcceptEncoding)
 }
 
 // setRoot changes the root of the Fs
@@ -3514,7 +1559,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		opt.SSECustomerKeyMD5 = base64.StdEncoding.EncodeToString(md5sumBinary[:])
 	}
 	srv := getClient(ctx, opt)
-	c, err := s3Connection(ctx, opt, srv)
+	c, provider, err := s3Connection(ctx, opt, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -3547,6 +1592,14 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		// MD5 digest of their object data.
 		f.etagIsNotMD5 = true
 	}
+	if opt.DirectoryBucket {
+		// Objects uploaded to directory buckets appear to have random ETags
+		//
+		// This doesn't appear to be documented
+		f.etagIsNotMD5 = true
+		// The normal API doesn't work for creating directory buckets, so don't try
+		f.opt.NoCheckBucket = true
+	}
 	f.setRoot(root)
 	f.features = (&fs.Features{
 		ReadMimeType:      true,
@@ -3556,16 +1609,15 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		UserMetadata:      true,
 		BucketBased:       true,
 		BucketBasedRootOK: true,
-		SetTier:           true,
-		GetTier:           true,
+		SetTier:           provider.StorageClass.Len() > 0,
+		GetTier:           provider.StorageClass.Len() > 0,
 		SlowModTime:       true,
 	}).Fill(ctx, f)
-	if opt.Provider == "Storj" {
-		f.features.SetTier = false
-		f.features.GetTier = false
+	if opt.Provider == "AWS" {
+		f.features.DoubleSlash = true
 	}
-	if opt.Provider == "IDrive" {
-		f.features.SetTier = false
+	if opt.Provider == "Rabata" {
+		f.features.Copy = nil
 	}
 	if opt.DirectoryMarkers {
 		f.features.CanHaveEmptyDirectories = true
@@ -3734,7 +1786,7 @@ func (f *Fs) updateRegionForBucket(ctx context.Context, bucket string) error {
 	// Make a new session with the new region
 	oldRegion := f.opt.Region
 	f.opt.Region = region
-	c, err := s3Connection(f.ctx, &f.opt, f.srv)
+	c, _, err := s3Connection(f.ctx, &f.opt, f.srv)
 	if err != nil {
 		return fmt.Errorf("creating new session failed: %w", err)
 	}
@@ -4038,7 +2090,7 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 		opt.prefix += "/"
 	}
 	if !opt.findFile {
-		if opt.directory != "" {
+		if opt.directory != "" && (opt.prefix == "" && !bucket.IsAllSlashes(opt.directory) || opt.prefix != "" && !strings.HasSuffix(opt.directory, "/")) {
 			opt.directory += "/"
 		}
 	}
@@ -4135,14 +2187,18 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 				}
 				remote = f.opt.Enc.ToStandardPath(remote)
 				if !strings.HasPrefix(remote, opt.prefix) {
-					fs.Logf(f, "Odd name received %q", remote)
+					fs.Logf(f, "Odd directory name received %q", remote)
 					continue
 				}
 				remote = remote[len(opt.prefix):]
+				// Trim one slash off the remote name
+				remote, _ = strings.CutSuffix(remote, "/")
+				if remote == "" || bucket.IsAllSlashes(remote) {
+					remote += "/"
+				}
 				if opt.addBucket {
 					remote = bucket.Join(opt.bucket, remote)
 				}
-				remote = strings.TrimSuffix(remote, "/")
 				err = fn(remote, &types.Object{Key: &remote}, nil, true)
 				if err != nil {
 					if err == errEndList {
@@ -4154,7 +2210,7 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 		}
 		foundItems += len(resp.Contents)
 		for i, object := range resp.Contents {
-			remote := deref(object.Key)
+			remote := *stringClone(deref(object.Key))
 			if urlEncodeListings {
 				remote, err = url.QueryUnescape(remote)
 				if err != nil {
@@ -4181,7 +2237,7 @@ func (f *Fs) list(ctx context.Context, opt listOpt, fn listFn) error {
 			remote = remote[len(opt.prefix):]
 			if isDirectory {
 				// process directory markers as directories
-				remote = strings.TrimRight(remote, "/")
+				remote, _ = strings.CutSuffix(remote, "/")
 			}
 			if opt.addBucket {
 				remote = bucket.Join(opt.bucket, remote)
@@ -4237,7 +2293,7 @@ func (f *Fs) itemToDirEntry(ctx context.Context, remote string, object *types.Ob
 }
 
 // listDir lists files and directories to out
-func (f *Fs) listDir(ctx context.Context, bucket, directory, prefix string, addBucket bool) (entries fs.DirEntries, err error) {
+func (f *Fs) listDir(ctx context.Context, bucket, directory, prefix string, addBucket bool, callback func(fs.DirEntry) error) (err error) {
 	// List the objects and directories
 	err = f.list(ctx, listOpt{
 		bucket:       bucket,
@@ -4253,16 +2309,16 @@ func (f *Fs) listDir(ctx context.Context, bucket, directory, prefix string, addB
 			return err
 		}
 		if entry != nil {
-			entries = append(entries, entry)
+			return callback(entry)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// bucket must be present if listing succeeded
 	f.cache.MarkOK(bucket)
-	return entries, nil
+	return nil
 }
 
 // listBuckets lists the buckets to out
@@ -4295,14 +2351,46 @@ func (f *Fs) listBuckets(ctx context.Context) (entries fs.DirEntries, err error)
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+	return list.WithListP(ctx, dir, f)
+}
+
+// ListP lists the objects and directories of the Fs starting
+// from dir non recursively into out.
+//
+// dir should be "" to start from the root, and should not
+// have trailing slashes.
+//
+// This should return ErrDirNotFound if the directory isn't
+// found.
+//
+// It should call callback for each tranche of entries read.
+// These need not be returned in any particular order.  If
+// callback returns an error then the listing will stop
+// immediately.
+func (f *Fs) ListP(ctx context.Context, dir string, callback fs.ListRCallback) error {
+	list := list.NewHelper(callback)
 	bucket, directory := f.split(dir)
 	if bucket == "" {
 		if directory != "" {
-			return nil, fs.ErrorListBucketRequired
+			return fs.ErrorListBucketRequired
 		}
-		return f.listBuckets(ctx)
+		entries, err := f.listBuckets(ctx)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			err = list.Add(entry)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		err := f.listDir(ctx, bucket, directory, f.rootDirectory, f.rootBucket == "", list.Add)
+		if err != nil {
+			return err
+		}
 	}
-	return f.listDir(ctx, bucket, directory, f.rootDirectory, f.rootBucket == "")
+	return list.Flush()
 }
 
 // ListR lists the objects and directories of the Fs starting
@@ -4323,7 +2411,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 // of listing recursively than doing a directory traversal.
 func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (err error) {
 	bucket, directory := f.split(dir)
-	list := walk.NewListRHelper(callback)
+	list := list.NewHelper(callback)
 	listR := func(bucket, directory, prefix string, addBucket bool) error {
 		return f.list(ctx, listOpt{
 			bucket:       bucket,
@@ -4464,7 +2552,7 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 
 // mkdirParent creates the parent bucket/directory if it doesn't exist
 func (f *Fs) mkdirParent(ctx context.Context, remote string) error {
-	remote = strings.TrimRight(remote, "/")
+	remote, _ = strings.CutSuffix(remote, "/")
 	dir := path.Dir(remote)
 	if dir == "/" || dir == "." {
 		dir = ""
@@ -4725,8 +2813,11 @@ func (f *Fs) copyMultipart(ctx context.Context, copyReq *s3.CopyObjectInput, dst
 			MultipartUpload: &types.CompletedMultipartUpload{
 				Parts: parts,
 			},
-			RequestPayer: req.RequestPayer,
-			UploadId:     uid,
+			RequestPayer:         req.RequestPayer,
+			SSECustomerAlgorithm: req.SSECustomerAlgorithm,
+			SSECustomerKey:       req.SSECustomerKey,
+			SSECustomerKeyMD5:    req.SSECustomerKeyMD5,
+			UploadId:             uid,
 		})
 		return f.shouldRetry(ctx, err)
 	})
@@ -4811,101 +2902,118 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 
 var commandHelp = []fs.CommandHelp{{
 	Name:  "restore",
-	Short: "Restore objects from GLACIER or INTELLIGENT-TIERING archive tier",
-	Long: `This command can be used to restore one or more objects from GLACIER to normal storage 
-or from INTELLIGENT-TIERING Archive Access / Deep Archive Access tier to the Frequent Access tier.
+	Short: "Restore objects from GLACIER or INTELLIGENT-TIERING archive tier.",
+	Long: `This command can be used to restore one or more objects from GLACIER to normal
+storage or from INTELLIGENT-TIERING Archive Access / Deep Archive Access tier
+to the Frequent Access tier.
 
-Usage Examples:
+Usage examples:
 
-    rclone backend restore s3:bucket/path/to/object -o priority=PRIORITY -o lifetime=DAYS
-    rclone backend restore s3:bucket/path/to/directory -o priority=PRIORITY -o lifetime=DAYS
-    rclone backend restore s3:bucket -o priority=PRIORITY -o lifetime=DAYS
-    rclone backend restore s3:bucket/path/to/directory -o priority=PRIORITY
+` + "```console" + `
+rclone backend restore s3:bucket/path/to/ --include /object -o priority=PRIORITY -o lifetime=DAYS
+rclone backend restore s3:bucket/path/to/directory -o priority=PRIORITY -o lifetime=DAYS
+rclone backend restore s3:bucket -o priority=PRIORITY -o lifetime=DAYS
+rclone backend restore s3:bucket/path/to/directory -o priority=PRIORITY
+` + "```" + `
 
-This flag also obeys the filters. Test first with --interactive/-i or --dry-run flags
+This flag also obeys the filters. Test first with --interactive/-i or --dry-run
+flags.
 
-    rclone --interactive backend restore --include "*.txt" s3:bucket/path -o priority=Standard -o lifetime=1
+` + "```console" + `
+rclone --interactive backend restore --include "*.txt" s3:bucket/path -o priority=Standard -o lifetime=1
+` + "```" + `
 
-All the objects shown will be marked for restore, then
+All the objects shown will be marked for restore, then:
 
-    rclone backend restore --include "*.txt" s3:bucket/path -o priority=Standard -o lifetime=1
+` + "```console" + `
+rclone backend restore --include "*.txt" s3:bucket/path -o priority=Standard -o lifetime=1
+` + "```" + `
 
 It returns a list of status dictionaries with Remote and Status
 keys. The Status will be OK if it was successful or an error message
 if not.
 
-    [
-        {
-            "Status": "OK",
-            "Remote": "test.txt"
-        },
-        {
-            "Status": "OK",
-            "Remote": "test/file4.txt"
-        }
-    ]
-
-`,
+` + "```json" + `
+[
+    {
+        "Status": "OK",
+        "Remote": "test.txt"
+    },
+    {
+        "Status": "OK",
+        "Remote": "test/file4.txt"
+    }
+]
+` + "```",
 	Opts: map[string]string{
-		"priority":    "Priority of restore: Standard|Expedited|Bulk",
-		"lifetime":    "Lifetime of the active copy in days, ignored for INTELLIGENT-TIERING storage",
+		"priority": "Priority of restore: Standard|Expedited|Bulk",
+		"lifetime": `Lifetime of the active copy in days, ignored for INTELLIGENT-TIERING
+storage.`,
 		"description": "The optional description for the job.",
 	},
 }, {
 	Name:  "restore-status",
-	Short: "Show the restore status for objects being restored from GLACIER or INTELLIGENT-TIERING storage",
-	Long: `This command can be used to show the status for objects being restored from GLACIER to normal storage
-or from INTELLIGENT-TIERING Archive Access / Deep Archive Access tier to the Frequent Access tier.
+	Short: "Show the status for objects being restored from GLACIER or INTELLIGENT-TIERING.",
+	Long: `This command can be used to show the status for objects being restored from
+GLACIER to normal storage or from INTELLIGENT-TIERING Archive Access / Deep
+Archive Access tier to the Frequent Access tier.
 
-Usage Examples:
+Usage examples:
 
-    rclone backend restore-status s3:bucket/path/to/object
-    rclone backend restore-status s3:bucket/path/to/directory
-    rclone backend restore-status -o all s3:bucket/path/to/directory
+` + "```console" + `
+rclone backend restore-status s3:bucket/path/to/object
+rclone backend restore-status s3:bucket/path/to/directory
+rclone backend restore-status -o all s3:bucket/path/to/directory
+` + "```" + `
 
 This command does not obey the filters.
 
-It returns a list of status dictionaries.
+It returns a list of status dictionaries:
 
-    [
-        {
-            "Remote": "file.txt",
-            "VersionID": null,
-            "RestoreStatus": {
-                "IsRestoreInProgress": true,
-                "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
-            },
-            "StorageClass": "GLACIER"
+` + "```json" + `
+[
+    {
+        "Remote": "file.txt",
+        "VersionID": null,
+        "RestoreStatus": {
+            "IsRestoreInProgress": true,
+            "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
         },
-        {
-            "Remote": "test.pdf",
-            "VersionID": null,
-            "RestoreStatus": {
-                "IsRestoreInProgress": false,
-                "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
-            },
-            "StorageClass": "DEEP_ARCHIVE"
+        "StorageClass": "GLACIER"
+    },
+    {
+        "Remote": "test.pdf",
+        "VersionID": null,
+        "RestoreStatus": {
+            "IsRestoreInProgress": false,
+            "RestoreExpiryDate": "2023-09-06T12:29:19+01:00"
         },
-        {
-            "Remote": "test.gz",
-            "VersionID": null,
-            "RestoreStatus": {
-                "IsRestoreInProgress": true,
-                "RestoreExpiryDate": "null"
-            },
-            "StorageClass": "INTELLIGENT_TIERING"
-        }
-    ]
-`,
+        "StorageClass": "DEEP_ARCHIVE"
+    },
+    {
+        "Remote": "test.gz",
+        "VersionID": null,
+        "RestoreStatus": {
+            "IsRestoreInProgress": true,
+            "RestoreExpiryDate": "null"
+        },
+        "StorageClass": "INTELLIGENT_TIERING"
+    }
+]
+` + "```",
 	Opts: map[string]string{
-		"all": "if set then show all objects, not just ones with restore status",
+		"all": "If set then show all objects, not just ones with restore status.",
 	},
 }, {
 	Name:  "list-multipart-uploads",
-	Short: "List the unfinished multipart uploads",
+	Short: "List the unfinished multipart uploads.",
 	Long: `This command lists the unfinished multipart uploads in JSON format.
 
-    rclone backend list-multipart s3:bucket/path/to/object
+Usage examples:
+
+` + "```console" + `
+rclone backend list-multipart s3:bucket/path/to/object
+` + "```" + `
 
 It returns a dictionary of buckets with values as lists of unfinished
 multipart uploads.
@@ -4913,44 +3021,47 @@ multipart uploads.
 You can call it with no bucket in which case it lists all bucket, with
 a bucket or with a bucket and path.
 
-    {
-      "rclone": [
+` + "```json" + `
+{
+    "rclone": [
         {
-          "Initiated": "2020-06-26T14:20:36Z",
-          "Initiator": {
-            "DisplayName": "XXX",
-            "ID": "arn:aws:iam::XXX:user/XXX"
-          },
-          "Key": "KEY",
-          "Owner": {
-            "DisplayName": null,
-            "ID": "XXX"
-          },
-          "StorageClass": "STANDARD",
-          "UploadId": "XXX"
+            "Initiated": "2020-06-26T14:20:36Z",
+            "Initiator": {
+                "DisplayName": "XXX",
+                "ID": "arn:aws:iam::XXX:user/XXX"
+            },
+            "Key": "KEY",
+            "Owner": {
+                "DisplayName": null,
+                "ID": "XXX"
+            },
+            "StorageClass": "STANDARD",
+            "UploadId": "XXX"
         }
-      ],
-      "rclone-1000files": [],
-      "rclone-dst": []
-    }
-
-`,
+    ],
+    "rclone-1000files": [],
+    "rclone-dst": []
+}
+` + "```",
 }, {
 	Name:  "cleanup",
 	Short: "Remove unfinished multipart uploads.",
 	Long: `This command removes unfinished multipart uploads of age greater than
 max-age which defaults to 24 hours.
 
-Note that you can use --interactive/-i or --dry-run with this command to see what
-it would do.
+Note that you can use --interactive/-i or --dry-run with this command to see
+what it would do.
 
-    rclone backend cleanup s3:bucket/path/to/object
-    rclone backend cleanup -o max-age=7w s3:bucket/path/to/object
+Usage examples:
 
-Durations are parsed as per the rest of rclone, 2h, 7d, 7w etc.
-`,
+` + "```console" + `
+rclone backend cleanup s3:bucket/path/to/object
+rclone backend cleanup -o max-age=7w s3:bucket/path/to/object
+` + "```" + `
+
+Durations are parsed as per the rest of rclone, 2h, 7d, 7w etc.`,
 	Opts: map[string]string{
-		"max-age": "Max age of upload to delete",
+		"max-age": "Max age of upload to delete.",
 	},
 }, {
 	Name:  "cleanup-hidden",
@@ -4958,11 +3069,14 @@ Durations are parsed as per the rest of rclone, 2h, 7d, 7w etc.
 	Long: `This command removes any old hidden versions of files
 on a versions enabled bucket.
 
-Note that you can use --interactive/-i or --dry-run with this command to see what
-it would do.
+Note that you can use --interactive/-i or --dry-run with this command to see
+what it would do.
 
-    rclone backend cleanup-hidden s3:bucket/path/to/dir
-`,
+Usage example:
+
+` + "```console" + `
+rclone backend cleanup-hidden s3:bucket/path/to/dir
+` + "```",
 }, {
 	Name:  "versioning",
 	Short: "Set/get versioning support for a bucket.",
@@ -4970,24 +3084,29 @@ it would do.
 passed and then returns the current versioning status for the bucket
 supplied.
 
-    rclone backend versioning s3:bucket # read status only
-    rclone backend versioning s3:bucket Enabled
-    rclone backend versioning s3:bucket Suspended
+Usage examples:
 
-It may return "Enabled", "Suspended" or "Unversioned". Note that once versioning
-has been enabled the status can't be set back to "Unversioned".
-`,
+` + "```console" + `
+rclone backend versioning s3:bucket # read status only
+rclone backend versioning s3:bucket Enabled
+rclone backend versioning s3:bucket Suspended
+` + "```" + `
+
+It may return "Enabled", "Suspended" or "Unversioned". Note that once
+versioning has been enabled the status can't be set back to "Unversioned".`,
 }, {
 	Name:  "set",
 	Short: "Set command for updating the config parameters.",
 	Long: `This set command can be used to update the config parameters
 for a running s3 backend.
 
-Usage Examples:
+Usage examples:
 
-    rclone backend set s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
-    rclone rc backend/command command=set fs=s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
-    rclone rc backend/command command=set fs=s3: -o session_token=X -o access_key_id=X -o secret_access_key=X
+` + "```console" + `
+rclone backend set s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+rclone rc backend/command command=set fs=s3: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+rclone rc backend/command command=set fs=s3: -o session_token=X -o access_key_id=X -o secret_access_key=X
+` + "```" + `
 
 The option keys are named as they are in the config file.
 
@@ -4995,8 +3114,7 @@ This rebuilds the connection to the s3 backend when it is called with
 the new parameters. Only new parameters need be passed as the values
 will default to those currently in use.
 
-It doesn't return anything.
-`,
+It doesn't return anything.`,
 }}
 
 // Command the backend to run a named command
@@ -5008,7 +3126,7 @@ It doesn't return anything.
 // The result should be capable of being JSON encoded
 // If it is a string or a []string it will be shown to the user
 // otherwise it will be JSON encoded and shown to the user like that
-func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out interface{}, err error) {
+func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out any, err error) {
 	switch name {
 	case "restore":
 		req := s3.RestoreObjectInput{
@@ -5104,7 +3222,7 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 		if err != nil {
 			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		c, err := s3Connection(f.ctx, &newOpt, f.srv)
+		c, _, err := s3Connection(f.ctx, &newOpt, f.srv)
 		if err != nil {
 			return nil, fmt.Errorf("updating session: %w", err)
 		}
@@ -5575,7 +3693,7 @@ func (o *Object) readMetaData(ctx context.Context) (err error) {
 func s3MetadataToMap(s3Meta map[string]string) map[string]string {
 	meta := make(map[string]string, len(s3Meta))
 	for k, v := range s3Meta {
-		meta[strings.ToLower(k)] = v
+		meta[strings.ToLower(k)] = *stringClone(v)
 	}
 	return meta
 }
@@ -5618,14 +3736,14 @@ func (o *Object) setMetaData(resp *s3.HeadObjectOutput) {
 			o.lastModified = *resp.LastModified
 		}
 	}
-	o.mimeType = deref(resp.ContentType)
+	o.mimeType = strings.Clone(deref(resp.ContentType))
 
 	// Set system metadata
-	o.storageClass = (*string)(&resp.StorageClass)
-	o.cacheControl = resp.CacheControl
-	o.contentDisposition = resp.ContentDisposition
-	o.contentEncoding = resp.ContentEncoding
-	o.contentLanguage = resp.ContentLanguage
+	o.storageClass = stringClone(string(resp.StorageClass))
+	o.cacheControl = stringClonePointer(resp.CacheControl)
+	o.contentDisposition = stringClonePointer(resp.ContentDisposition)
+	o.contentEncoding = stringClonePointer(removeAWSChunked(resp.ContentEncoding))
+	o.contentLanguage = stringClonePointer(resp.ContentLanguage)
 
 	// If decompressing then size and md5sum are unknown
 	if o.fs.opt.Decompress && deref(o.contentEncoding) == "gzip" {
@@ -5663,6 +3781,10 @@ func (o *Object) ModTime(ctx context.Context) time.Time {
 
 // SetModTime sets the modification time of the local fs object
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
+	if o.fs.opt.Provider == "Rabata" {
+		// Rabata does not support copying objects
+		return fs.ErrorCantSetModTime
+	}
 	err := o.readMetaData(ctx)
 	if err != nil {
 		return err
@@ -5690,6 +3812,36 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 // Storable raturns a boolean indicating if this object is storable
 func (o *Object) Storable() bool {
 	return true
+}
+
+// removeAWSChunked removes the "aws-chunked" content-coding from a
+// Content-Encoding field value (RFC 9110). Comparison is case-insensitive.
+// Returns nil if encoding is empty after removal.
+func removeAWSChunked(pv *string) *string {
+	if pv == nil {
+		return nil
+	}
+	v := *pv
+	if v == "" {
+		return nil
+	}
+	if !strings.Contains(strings.ToLower(v), "aws-chunked") {
+		return pv
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		tok := strings.TrimSpace(p)
+		if tok == "" || strings.EqualFold(tok, "aws-chunked") {
+			continue
+		}
+		out = append(out, tok)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	v = strings.Join(out, ",")
+	return &v
 }
 
 func (o *Object) downloadFromURL(ctx context.Context, bucketPath string, options ...fs.OpenOption) (in io.ReadCloser, err error) {
@@ -5721,8 +3873,8 @@ func (o *Object) downloadFromURL(ctx context.Context, bucketPath string, options
 	metaData := make(map[string]string)
 	for key, value := range resp.Header {
 		key = strings.ToLower(key)
-		if strings.HasPrefix(key, "x-amz-meta-") {
-			metaKey := strings.TrimPrefix(key, "x-amz-meta-")
+		if after, ok := strings.CutPrefix(key, "x-amz-meta-"); ok {
+			metaKey := after
 			metaData[metaKey] = value[0]
 		}
 	}
@@ -5745,10 +3897,29 @@ func (o *Object) downloadFromURL(ctx context.Context, bucketPath string, options
 		ContentEncoding:    header("Content-Encoding"),
 		ContentLanguage:    header("Content-Language"),
 		ContentType:        header("Content-Type"),
-		StorageClass:       types.StorageClass(*header("X-Amz-Storage-Class")),
+		StorageClass:       types.StorageClass(deref(header("X-Amz-Storage-Class"))),
 	}
 	o.setMetaData(&head)
 	return resp.Body, err
+}
+
+// middleware to stop the SDK adding `Accept-Encoding: identity`
+func removeDisableGzip() func(*middleware.Stack) error {
+	return func(stack *middleware.Stack) error {
+		_, err := stack.Finalize.Remove("DisableAcceptEncodingGzip")
+		return err
+	}
+}
+
+// middleware to set Accept-Encoding to how we want it
+//
+// This make sure we download compressed files as-is from all platforms
+func (f *Fs) acceptEncoding() (APIOptions []func(*middleware.Stack) error) {
+	APIOptions = append(APIOptions, removeDisableGzip())
+	if f.opt.UseAcceptEncodingGzip.Value {
+		APIOptions = append(APIOptions, smithyhttp.AddHeaderValue("Accept-Encoding", "gzip"))
+	}
+	return APIOptions
 }
 
 // Open an object for read
@@ -5784,11 +3955,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 
 	var APIOptions []func(*middleware.Stack) error
 
-	// Override the automatic decompression in the transport to
-	// download compressed files as-is
-	if o.fs.opt.UseAcceptEncodingGzip.Value {
-		APIOptions = append(APIOptions, smithyhttp.AddHeaderValue("Accept-Encoding", "gzip"))
-	}
+	// Set the SDK to always download compressed files as-is
+	APIOptions = append(APIOptions, o.fs.acceptEncoding()...)
 
 	for _, option := range options {
 		switch option.(type) {
@@ -5844,7 +4012,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	o.setMetaData(&head)
 
 	// Decompress body if necessary
-	if deref(resp.ContentEncoding) == "gzip" {
+	if deref(removeAWSChunked(resp.ContentEncoding)) == "gzip" {
 		if o.fs.opt.Decompress || (resp.ContentLength == nil && o.fs.opt.MightGzip.Value) {
 			return readers.NewGzipReader(resp.Body)
 		}
@@ -5926,7 +4094,7 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 			if mOut == nil {
 				err = fserrors.RetryErrorf("internal error: no info from multipart upload")
 			} else if mOut.UploadId == nil {
-				err = fserrors.RetryErrorf("internal error: no UploadId in multpart upload: %#v", *mOut)
+				err = fserrors.RetryErrorf("internal error: no UploadId in multipart upload: %#v", *mOut)
 			}
 		}
 		return f.shouldRetry(ctx, err)
@@ -5939,8 +4107,8 @@ func (f *Fs) OpenChunkWriter(ctx context.Context, remote string, src fs.ObjectIn
 		chunkSize:            int64(chunkSize),
 		size:                 size,
 		f:                    f,
-		bucket:               mOut.Bucket,
-		key:                  mOut.Key,
+		bucket:               ui.req.Bucket,
+		key:                  ui.req.Key,
 		uploadID:             mOut.UploadId,
 		multiPartUploadInput: &mReq,
 		completedParts:       make([]types.CompletedPart, 0),
@@ -6028,6 +4196,10 @@ func (w *s3ChunkWriter) WriteChunk(ctx context.Context, chunkNumber int, reader 
 		SSECustomerKey:       w.multiPartUploadInput.SSECustomerKey,
 		SSECustomerKeyMD5:    w.multiPartUploadInput.SSECustomerKeyMD5,
 	}
+	if w.f.opt.DirectoryBucket {
+		// Directory buckets do not support "Content-Md5" header
+		uploadPartReq.ContentMD5 = nil
+	}
 	var uout *s3.UploadPartOutput
 	err = w.f.pacer.Call(func() (bool, error) {
 		// rewind the reader on retry and after reading md5
@@ -6039,6 +4211,9 @@ func (w *s3ChunkWriter) WriteChunk(ctx context.Context, chunkNumber int, reader 
 		if err != nil {
 			if chunkNumber <= 8 {
 				return w.f.shouldRetry(ctx, err)
+			}
+			if fserrors.ContextError(ctx, &err) {
+				return false, err
 			}
 			// retry all chunks once have done the first few
 			return true, err
@@ -6087,8 +4262,11 @@ func (w *s3ChunkWriter) Close(ctx context.Context) (err error) {
 			MultipartUpload: &types.CompletedMultipartUpload{
 				Parts: w.completedParts,
 			},
-			RequestPayer: w.multiPartUploadInput.RequestPayer,
-			UploadId:     w.uploadID,
+			RequestPayer:         w.multiPartUploadInput.RequestPayer,
+			SSECustomerAlgorithm: w.multiPartUploadInput.SSECustomerAlgorithm,
+			SSECustomerKey:       w.multiPartUploadInput.SSECustomerKey,
+			SSECustomerKeyMD5:    w.multiPartUploadInput.SSECustomerKeyMD5,
+			UploadId:             w.uploadID,
 		})
 		return w.f.shouldRetry(ctx, err)
 	})
@@ -6116,9 +4294,9 @@ func (o *Object) uploadMultipart(ctx context.Context, src fs.ObjectInfo, in io.R
 		return wantETag, gotETag, versionID, ui, err
 	}
 
-	var s3cw *s3ChunkWriter = chunkWriter.(*s3ChunkWriter)
-	gotETag = s3cw.eTag
-	versionID = aws.String(s3cw.versionID)
+	s3cw := chunkWriter.(*s3ChunkWriter)
+	gotETag = *stringClone(s3cw.eTag)
+	versionID = stringClone(s3cw.versionID)
 
 	hashOfHashes := md5.Sum(s3cw.md5s)
 	wantETag = fmt.Sprintf("%s-%d", hex.EncodeToString(hashOfHashes[:]), len(s3cw.completedParts))
@@ -6150,8 +4328,8 @@ func (o *Object) uploadSinglepartPutObject(ctx context.Context, req *s3.PutObjec
 	}
 	lastModified = time.Now()
 	if resp != nil {
-		etag = deref(resp.ETag)
-		versionID = resp.VersionId
+		etag = *stringClone(deref(resp.ETag))
+		versionID = stringClonePointer(resp.VersionId)
 	}
 	return etag, lastModified, versionID, nil
 }
@@ -6203,8 +4381,8 @@ func (o *Object) uploadSinglepartPresignedRequest(ctx context.Context, req *s3.P
 		if date, err := http.ParseTime(resp.Header.Get("Date")); err != nil {
 			lastModified = date
 		}
-		etag = resp.Header.Get("Etag")
-		vID := resp.Header.Get("x-amz-version-id")
+		etag = *stringClone(resp.Header.Get("Etag"))
+		vID := *stringClone(resp.Header.Get("x-amz-version-id"))
 		if vID != "" {
 			versionID = &vID
 		}
@@ -6258,7 +4436,7 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 		case "content-disposition":
 			ui.req.ContentDisposition = pv
 		case "content-encoding":
-			ui.req.ContentEncoding = pv
+			ui.req.ContentEncoding = removeAWSChunked(pv)
 		case "content-language":
 			ui.req.ContentLanguage = pv
 		case "content-type":
@@ -6304,7 +4482,7 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 				if (multipart || o.fs.etagIsNotMD5) && !o.fs.opt.DisableChecksum {
 					// Set the md5sum as metadata on the object if
 					// - a multipart upload
-					// - the Etag is not an MD5, eg when using SSE/SSE-C
+					// - the Etag is not an MD5, eg when using SSE/SSE-C or directory buckets
 					// provided checksums aren't disabled
 					ui.req.Metadata[metaMD5Hash] = md5sumBase64
 				}
@@ -6319,7 +4497,7 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 	if size >= 0 {
 		ui.req.ContentLength = &size
 	}
-	if md5sumBase64 != "" {
+	if md5sumBase64 != "" && !o.fs.opt.DirectoryBucket {
 		ui.req.ContentMD5 = &md5sumBase64
 	}
 	if o.fs.opt.RequesterPays {
@@ -6355,7 +4533,7 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 		case "content-disposition":
 			ui.req.ContentDisposition = aws.String(value)
 		case "content-encoding":
-			ui.req.ContentEncoding = aws.String(value)
+			ui.req.ContentEncoding = removeAWSChunked(aws.String(value))
 		case "content-language":
 			ui.req.ContentLanguage = aws.String(value)
 		case "content-type":
@@ -6576,6 +4754,7 @@ var (
 	_ fs.Copier          = &Fs{}
 	_ fs.PutStreamer     = &Fs{}
 	_ fs.ListRer         = &Fs{}
+	_ fs.ListPer         = &Fs{}
 	_ fs.Commander       = &Fs{}
 	_ fs.CleanUpper      = &Fs{}
 	_ fs.OpenChunkWriter = &Fs{}

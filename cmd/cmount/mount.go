@@ -8,9 +8,9 @@ package cmount
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"os"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/rclone/rclone/cmd/mountlib"
@@ -33,19 +33,6 @@ func init() {
 	}
 	mountlib.AddRc("cmount", mount)
 	buildinfo.Tags = append(buildinfo.Tags, "cmount")
-}
-
-// Find the option string in the current options
-func findOption(name string, options []string) (found bool) {
-	for _, option := range options {
-		if option == "-o" {
-			continue
-		}
-		if strings.Contains(option, name) {
-			return true
-		}
-	}
-	return false
 }
 
 // mountOptions configures the options from the command line flags
@@ -93,9 +80,9 @@ func mountOptions(VFS *vfs.VFS, device string, mountpoint string, opt *mountlib.
 		if VFS.Opt.ReadOnly {
 			options = append(options, "-o", "ro")
 		}
-		if opt.WritebackCache {
-			// FIXME? options = append(options, "-o", WritebackCache())
-		}
+		//if opt.WritebackCache {
+		// FIXME? options = append(options, "-o", WritebackCache())
+		//}
 		if runtime.GOOS == "darwin" {
 			if opt.VolumeName != "" {
 				options = append(options, "-o", "volname="+opt.VolumeName)
@@ -111,9 +98,7 @@ func mountOptions(VFS *vfs.VFS, device string, mountpoint string, opt *mountlib.
 	for _, option := range opt.ExtraOptions {
 		options = append(options, "-o", option)
 	}
-	for _, option := range opt.ExtraFlags {
-		options = append(options, option)
-	}
+	options = append(options, opt.ExtraFlags...)
 	return options
 }
 
@@ -165,7 +150,11 @@ func mount(VFS *vfs.VFS, mountPath string, opt *mountlib.Options) (<-chan error,
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("mount failed: %v", r)
+				err := fmt.Errorf("mount failed: %v", r)
+				if strings.Contains(strings.ToLower(err.Error()), "cannot find winfsp") {
+					err = fmt.Errorf("%w\nHint: Install WinFsp from https://winfsp.dev/rel/", err)
+				}
+				errChan <- err
 			}
 		}()
 		var err error
