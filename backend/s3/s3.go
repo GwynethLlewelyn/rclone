@@ -39,6 +39,9 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/ncw/swift/v2"
 
+	"golang.org/x/net/http/httpguts"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/chunksize"
@@ -59,8 +62,6 @@ import (
 	"github.com/rclone/rclone/lib/readers"
 	"github.com/rclone/rclone/lib/rest"
 	"github.com/rclone/rclone/lib/version"
-	"golang.org/x/net/http/httpguts"
-	"golang.org/x/sync/errgroup"
 )
 
 // Register with Fs
@@ -575,6 +576,13 @@ circumstances or for testing.
 			Default:  false,
 			Advanced: true,
 		}, {
+			Name: "use_data_integrity_protections",
+			Help: `If true use AWS S3 data integrity protections.
+
+See [AWS Docs on Data Integrity Protections](https://docs.aws.amazon.com/sdkref/latest/guide/feature-dataintegrity.html)`,
+			Default:  fs.Tristate{},
+			Advanced: true,
+		}, {
 			Name:     "versions",
 			Help:     "Include old versions in directory listings.",
 			Default:  false,
@@ -892,67 +900,68 @@ var systemMetadataInfo = map[string]fs.MetadataHelp{
 
 // Options defines the configuration for this backend
 type Options struct {
-	Provider              string               `config:"provider"`
-	EnvAuth               bool                 `config:"env_auth"`
-	AccessKeyID           string               `config:"access_key_id"`
-	SecretAccessKey       string               `config:"secret_access_key"`
-	Region                string               `config:"region"`
-	Endpoint              string               `config:"endpoint"`
-	STSEndpoint           string               `config:"sts_endpoint"`
-	UseDualStack          bool                 `config:"use_dual_stack"`
-	LocationConstraint    string               `config:"location_constraint"`
-	ACL                   string               `config:"acl"`
-	BucketACL             string               `config:"bucket_acl"`
-	RequesterPays         bool                 `config:"requester_pays"`
-	ServerSideEncryption  string               `config:"server_side_encryption"`
-	SSEKMSKeyID           string               `config:"sse_kms_key_id"`
-	SSECustomerAlgorithm  string               `config:"sse_customer_algorithm"`
-	SSECustomerKey        string               `config:"sse_customer_key"`
-	SSECustomerKeyBase64  string               `config:"sse_customer_key_base64"`
-	SSECustomerKeyMD5     string               `config:"sse_customer_key_md5"`
-	StorageClass          string               `config:"storage_class"`
-	UploadCutoff          fs.SizeSuffix        `config:"upload_cutoff"`
-	CopyCutoff            fs.SizeSuffix        `config:"copy_cutoff"`
-	ChunkSize             fs.SizeSuffix        `config:"chunk_size"`
-	MaxUploadParts        int                  `config:"max_upload_parts"`
-	DisableChecksum       bool                 `config:"disable_checksum"`
-	SharedCredentialsFile string               `config:"shared_credentials_file"`
-	Profile               string               `config:"profile"`
-	SessionToken          string               `config:"session_token"`
-	UploadConcurrency     int                  `config:"upload_concurrency"`
-	ForcePathStyle        bool                 `config:"force_path_style"`
-	V2Auth                bool                 `config:"v2_auth"`
-	UseAccelerateEndpoint bool                 `config:"use_accelerate_endpoint"`
-	UseARNRegion          bool                 `config:"use_arn_region"`
-	LeavePartsOnError     bool                 `config:"leave_parts_on_error"`
-	ListChunk             int32                `config:"list_chunk"`
-	ListVersion           int                  `config:"list_version"`
-	ListURLEncode         fs.Tristate          `config:"list_url_encode"`
-	NoCheckBucket         bool                 `config:"no_check_bucket"`
-	NoHead                bool                 `config:"no_head"`
-	NoHeadObject          bool                 `config:"no_head_object"`
-	Enc                   encoder.MultiEncoder `config:"encoding"`
-	DisableHTTP2          bool                 `config:"disable_http2"`
-	DownloadURL           string               `config:"download_url"`
-	DirectoryMarkers      bool                 `config:"directory_markers"`
-	UseMultipartEtag      fs.Tristate          `config:"use_multipart_etag"`
-	UsePresignedRequest   bool                 `config:"use_presigned_request"`
-	Versions              bool                 `config:"versions"`
-	VersionAt             fs.Time              `config:"version_at"`
-	VersionDeleted        bool                 `config:"version_deleted"`
-	Decompress            bool                 `config:"decompress"`
-	MightGzip             fs.Tristate          `config:"might_gzip"`
-	UseAcceptEncodingGzip fs.Tristate          `config:"use_accept_encoding_gzip"`
-	NoSystemMetadata      bool                 `config:"no_system_metadata"`
-	UseAlreadyExists      fs.Tristate          `config:"use_already_exists"`
-	UseMultipartUploads   fs.Tristate          `config:"use_multipart_uploads"`
-	UseUnsignedPayload    fs.Tristate          `config:"use_unsigned_payload"`
-	SDKLogMode            sdkLogMode           `config:"sdk_log_mode"`
-	DirectoryBucket       bool                 `config:"directory_bucket"`
-	IBMAPIKey             string               `config:"ibm_api_key"`
-	IBMInstanceID         string               `config:"ibm_resource_instance_id"`
-	UseXID                fs.Tristate          `config:"use_x_id"`
-	SignAcceptEncoding    fs.Tristate          `config:"sign_accept_encoding"`
+	Provider                    string               `config:"provider"`
+	EnvAuth                     bool                 `config:"env_auth"`
+	AccessKeyID                 string               `config:"access_key_id"`
+	SecretAccessKey             string               `config:"secret_access_key"`
+	Region                      string               `config:"region"`
+	Endpoint                    string               `config:"endpoint"`
+	STSEndpoint                 string               `config:"sts_endpoint"`
+	UseDualStack                bool                 `config:"use_dual_stack"`
+	LocationConstraint          string               `config:"location_constraint"`
+	ACL                         string               `config:"acl"`
+	BucketACL                   string               `config:"bucket_acl"`
+	RequesterPays               bool                 `config:"requester_pays"`
+	ServerSideEncryption        string               `config:"server_side_encryption"`
+	SSEKMSKeyID                 string               `config:"sse_kms_key_id"`
+	SSECustomerAlgorithm        string               `config:"sse_customer_algorithm"`
+	SSECustomerKey              string               `config:"sse_customer_key"`
+	SSECustomerKeyBase64        string               `config:"sse_customer_key_base64"`
+	SSECustomerKeyMD5           string               `config:"sse_customer_key_md5"`
+	StorageClass                string               `config:"storage_class"`
+	UploadCutoff                fs.SizeSuffix        `config:"upload_cutoff"`
+	CopyCutoff                  fs.SizeSuffix        `config:"copy_cutoff"`
+	ChunkSize                   fs.SizeSuffix        `config:"chunk_size"`
+	MaxUploadParts              int                  `config:"max_upload_parts"`
+	DisableChecksum             bool                 `config:"disable_checksum"`
+	SharedCredentialsFile       string               `config:"shared_credentials_file"`
+	Profile                     string               `config:"profile"`
+	SessionToken                string               `config:"session_token"`
+	UploadConcurrency           int                  `config:"upload_concurrency"`
+	ForcePathStyle              bool                 `config:"force_path_style"`
+	V2Auth                      bool                 `config:"v2_auth"`
+	UseAccelerateEndpoint       bool                 `config:"use_accelerate_endpoint"`
+	UseARNRegion                bool                 `config:"use_arn_region"`
+	LeavePartsOnError           bool                 `config:"leave_parts_on_error"`
+	ListChunk                   int32                `config:"list_chunk"`
+	ListVersion                 int                  `config:"list_version"`
+	ListURLEncode               fs.Tristate          `config:"list_url_encode"`
+	NoCheckBucket               bool                 `config:"no_check_bucket"`
+	NoHead                      bool                 `config:"no_head"`
+	NoHeadObject                bool                 `config:"no_head_object"`
+	Enc                         encoder.MultiEncoder `config:"encoding"`
+	DisableHTTP2                bool                 `config:"disable_http2"`
+	DownloadURL                 string               `config:"download_url"`
+	DirectoryMarkers            bool                 `config:"directory_markers"`
+	UseMultipartEtag            fs.Tristate          `config:"use_multipart_etag"`
+	UsePresignedRequest         bool                 `config:"use_presigned_request"`
+	UseDataIntegrityProtections fs.Tristate          `config:"use_data_integrity_protections"`
+	Versions                    bool                 `config:"versions"`
+	VersionAt                   fs.Time              `config:"version_at"`
+	VersionDeleted              bool                 `config:"version_deleted"`
+	Decompress                  bool                 `config:"decompress"`
+	MightGzip                   fs.Tristate          `config:"might_gzip"`
+	UseAcceptEncodingGzip       fs.Tristate          `config:"use_accept_encoding_gzip"`
+	NoSystemMetadata            bool                 `config:"no_system_metadata"`
+	UseAlreadyExists            fs.Tristate          `config:"use_already_exists"`
+	UseMultipartUploads         fs.Tristate          `config:"use_multipart_uploads"`
+	UseUnsignedPayload          fs.Tristate          `config:"use_unsigned_payload"`
+	SDKLogMode                  sdkLogMode           `config:"sdk_log_mode"`
+	DirectoryBucket             bool                 `config:"directory_bucket"`
+	IBMAPIKey                   string               `config:"ibm_api_key"`
+	IBMInstanceID               string               `config:"ibm_resource_instance_id"`
+	UseXID                      fs.Tristate          `config:"use_x_id"`
+	SignAcceptEncoding          fs.Tristate          `config:"sign_accept_encoding"`
 }
 
 // Fs represents a remote s3 server
@@ -1302,6 +1311,10 @@ func s3Connection(ctx context.Context, opt *Options, client *http.Client) (s3Cli
 		} else {
 			s3Opt.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
 		}
+		if !opt.UseDataIntegrityProtections.Value {
+			s3Opt.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			s3Opt.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		}
 		// FIXME not ported from SDK v1 - not sure what this does
 		// s3Opt.UsEast1RegionalEndpoint = endpoints.RegionalS3UsEast1Endpoint
 	})
@@ -1497,6 +1510,7 @@ func setQuirks(opt *Options, provider *Provider) {
 	set(&opt.ListURLEncode, true, provider.Quirks.ListURLEncode)
 	set(&opt.UseMultipartEtag, true, provider.Quirks.UseMultipartEtag)
 	set(&opt.UseAcceptEncodingGzip, true, provider.Quirks.UseAcceptEncodingGzip)
+	set(&opt.UseDataIntegrityProtections, false, provider.Quirks.UseDataIntegrityProtections)
 	set(&opt.MightGzip, true, provider.Quirks.MightGzip)
 	set(&opt.UseAlreadyExists, true, provider.Quirks.UseAlreadyExists)
 	set(&opt.UseMultipartUploads, true, provider.Quirks.UseMultipartUploads)
@@ -1634,10 +1648,13 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		newRoot, leaf := path.Split(oldRoot)
 		f.setRoot(newRoot)
 		_, err := f.NewObject(ctx, leaf)
-		if err != nil {
+		if errors.Is(err, fs.ErrorObjectNotFound) {
 			// File doesn't exist or is a directory so return old f
 			f.setRoot(oldRoot)
 			return f, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		// return an error with an fs which points to the parent
 		return f, fs.ErrorIsFile
@@ -2818,6 +2835,8 @@ func (f *Fs) copyMultipart(ctx context.Context, copyReq *s3.CopyObjectInput, dst
 			SSECustomerKey:       req.SSECustomerKey,
 			SSECustomerKeyMD5:    req.SSECustomerKeyMD5,
 			UploadId:             uid,
+			IfMatch:              copyReq.IfMatch,
+			IfNoneMatch:          copyReq.IfNoneMatch,
 		})
 		return f.shouldRetry(ctx, err)
 	})
@@ -2852,13 +2871,20 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 		MetadataDirective: types.MetadataDirectiveCopy,
 	}
 
-	// Update the metadata if it is in use
-	if ci := fs.GetConfig(ctx); ci.Metadata {
-		ui, err := srcObj.prepareUpload(ctx, src, fs.MetadataAsOpenOptions(ctx), true)
-		if err != nil {
-			return nil, fmt.Errorf("failed to prepare upload: %w", err)
-		}
-		setFrom_s3CopyObjectInput_s3PutObjectInput(&req, ui.req)
+	// Build upload options including headers and metadata
+	ci := fs.GetConfig(ctx)
+	uploadOptions := fs.MetadataAsOpenOptions(ctx)
+	for _, option := range ci.UploadHeaders {
+		uploadOptions = append(uploadOptions, option)
+	}
+
+	ui, err := srcObj.prepareUpload(ctx, src, uploadOptions, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare upload: %w", err)
+	}
+
+	setFrom_s3CopyObjectInput_s3PutObjectInput(&req, ui.req)
+	if ci.Metadata {
 		req.MetadataDirective = types.MetadataDirectiveReplace
 	}
 
@@ -4267,6 +4293,8 @@ func (w *s3ChunkWriter) Close(ctx context.Context) (err error) {
 			SSECustomerKey:       w.multiPartUploadInput.SSECustomerKey,
 			SSECustomerKeyMD5:    w.multiPartUploadInput.SSECustomerKeyMD5,
 			UploadId:             w.uploadID,
+			IfMatch:              w.ui.req.IfMatch,
+			IfNoneMatch:          w.ui.req.IfNoneMatch,
 		})
 		return w.f.shouldRetry(ctx, err)
 	})
@@ -4538,6 +4566,10 @@ func (o *Object) prepareUpload(ctx context.Context, src fs.ObjectInfo, options [
 			ui.req.ContentLanguage = aws.String(value)
 		case "content-type":
 			ui.req.ContentType = aws.String(value)
+		case "if-match":
+			ui.req.IfMatch = aws.String(value)
+		case "if-none-match":
+			ui.req.IfNoneMatch = aws.String(value)
 		case "x-amz-tagging":
 			ui.req.Tagging = aws.String(value)
 		default:

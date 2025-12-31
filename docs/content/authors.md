@@ -1043,3 +1043,8 @@ put them back in again. -->
 - Copilot <198982749+Copilot@users.noreply.github.com>
 - Alex <64072843+A1ex3@users.noreply.github.com>
 - n4n5 <its.just.n4n5@gmail.com>
+- aliaj1 <ali19961@gmail.com>
+- Sean Turner <30396892+seanturner026@users.noreply.github.com>
+- jijamik <30904953+jijamik@users.noreply.github.com>
+- Dominik Sander <git@dsander.de>
+- Nikolay Kiryanov <nikolay@kiryanov.ru>
